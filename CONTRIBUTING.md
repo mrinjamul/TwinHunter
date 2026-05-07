@@ -1,8 +1,8 @@
-# Contributing to **go-dupfinder**
+# Contributing to **twinhunter**
 
 :+1::tada: First off, thanks for taking the time to contribute! :tada::+1:
 
-The following is a set of guidelines for contributing to _go-dupfinder_, which are hosted in the [mrinjamul/go-dupfinder](https://github.com/mrinjamul/go-dupfinder) on GitHub. These are mostly guidelines, not rules. Use your best judgment, and feel free to propose changes to this document in a pull request.
+The following is a set of guidelines for contributing to _twinhunter_, which are hosted in the [mrinjamul/twinhunter](https://github.com/mrinjamul/twinhunter) on GitHub. These are mostly guidelines, not rules. Use your best judgment, and feel free to propose changes to this document in a pull request.
 
 We :heart: contributions from our community! Thank you for taking the time to review this guide and understand how we work. And please remember, all interactions in this repository should adhere to the [Code of Conduct](CODE_OF_CONDUCT.md).
 

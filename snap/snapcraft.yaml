@@ -1,4 +1,4 @@
-name: go-dupfinder
+name: twinhunter
 base: core18 # the base snap is the execution environment for this snap
 version: "0.1.3"
 summary: A Simple duplicate file finder
@@ -9,17 +9,17 @@ grade: stable
 confinement: strict
 
 apps:
-  go-dupfinder:
-    command: go-dupfinder
+  twinhunter:
+    command: twinhunter
 
 parts:
-  go-dupfinder:
+  twinhunter:
     plugin: go
     source: .
-    go-importpath: go-dupfinder
+    go-importpath: twinhunter
 
 plugs:
-  go-dupfinder-home:
+  twinhunter-home:
     interface: home
-  go-dupfinder-removable-media:
+  twinhunter-removable-media:
     interface: removable-media

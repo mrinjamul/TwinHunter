@@ -27,10 +27,6 @@ builds:
     goarch:
       - amd64
       - arm64
-      - "386"
-      - arm
-    goarm:
-      - "7"
     ignore:
       - goos: windows
         goarch: arm64

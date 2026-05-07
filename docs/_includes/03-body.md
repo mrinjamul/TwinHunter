@@ -2,18 +2,18 @@
 
 #### Installing from go
 
-First, use go get to install the latest version. This command will install the `go-dupfinder` and its dependencies:
+First, use go get to install the latest version. This command will install the `twinhunter` and its dependencies:
 
-`go get -u github.com/mrinjamul/go-dupfinder`
+`go get -u github.com/mrinjamul/twinhunter`
 
 #### Installing from Binaries
 
 Download for your platform
 
-[Download](https://github.com/mrinjamul/go-dupfinder/releases)
+[Download](https://github.com/mrinjamul/twinhunter/releases)
 
 ## Usage
 
 ```
-go-dupfinder find .
+twinhunter find .
 ```

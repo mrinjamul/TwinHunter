@@ -1,8 +1,9 @@
 package core
 
 import (
+	"os"
 	"path/filepath"
-	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,15 +12,29 @@ import (
 
 var now = time.Now()
 
-func testDir(path ...string) string {
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Join(filepath.Dir(file), "..")
-	parts := append([]string{root, "test_data"}, path...)
-	return filepath.Join(parts...)
+func createTestDir(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for path, content := range files {
+		fullPath := filepath.Join(dir, path)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
 }
 
 func TestScanDuplicates(t *testing.T) {
-	dir := testDir("duplicates")
+	dir := createTestDir(t, map[string]string{
+		"dir_a/photo.jpg":         "duplicate content",
+		"dir_b/photo.jpg":         "duplicate content",
+		"dir_b/backup/photo.jpg":  "duplicate content",
+		"dir_a/unique.txt":        "unique one",
+		"dir_b/readme.md":         "another unique",
+	})
 	cfg := ScanConfig{
 		Path:      dir,
 		Recursive: true,
@@ -49,7 +64,11 @@ func TestScanDuplicates(t *testing.T) {
 }
 
 func TestScanExcludeDirs(t *testing.T) {
-	dir := testDir("exclude_test")
+	dir := createTestDir(t, map[string]string{
+		".git/config":                  "git config",
+		"node_modules/pkg/index.js":    "npm stuff",
+		"source/main.go":               "package main",
+	})
 	cfg := ScanConfig{
 		Path:      dir,
 		Recursive: true,
@@ -66,7 +85,12 @@ func TestScanExcludeDirs(t *testing.T) {
 }
 
 func TestScanMinSize(t *testing.T) {
-	dir := testDir("mixed_sizes")
+	dir := createTestDir(t, map[string]string{
+		"large.dat":      strings.Repeat("X", 200000),
+		"large_copy.dat": strings.Repeat("X", 200000),
+		"medium.bin":     strings.Repeat("Y", 200000),
+		"small.txt":      "t",
+	})
 	cfg := ScanConfig{
 		Path:      dir,
 		Recursive: true,
@@ -84,7 +108,12 @@ func TestScanMinSize(t *testing.T) {
 }
 
 func TestScanMaxSize(t *testing.T) {
-	dir := testDir("mixed_sizes")
+	dir := createTestDir(t, map[string]string{
+		"large.dat":      strings.Repeat("X", 200000),
+		"large_copy.dat": strings.Repeat("X", 200000),
+		"medium.bin":     strings.Repeat("Y", 200000),
+		"small.txt":      "t",
+	})
 	cfg := ScanConfig{
 		Path:      dir,
 		Recursive: true,
@@ -102,7 +131,7 @@ func TestScanMaxSize(t *testing.T) {
 }
 
 func TestScanEmptyDir(t *testing.T) {
-	dir := testDir("empty_dir")
+	dir := t.TempDir()
 	cfg := ScanConfig{
 		Path:      dir,
 		Recursive: true,
@@ -119,7 +148,10 @@ func TestScanEmptyDir(t *testing.T) {
 }
 
 func TestScanNonRecursive(t *testing.T) {
-	dir := testDir("duplicates")
+	dir := createTestDir(t, map[string]string{
+		"dir_a/photo.jpg": "duplicate content",
+		"dir_b/photo.jpg": "duplicate content",
+	})
 	cfg := ScanConfig{
 		Path:      dir,
 		Recursive: false,
@@ -136,7 +168,12 @@ func TestScanNonRecursive(t *testing.T) {
 }
 
 func TestScanWithExcludePatterns(t *testing.T) {
-	dir := testDir("mixed_sizes")
+	dir := createTestDir(t, map[string]string{
+		"large.dat":      strings.Repeat("X", 200000),
+		"large_copy.dat": strings.Repeat("X", 200000),
+		"medium.bin":     strings.Repeat("Y", 200000),
+		"small.txt":      "t",
+	})
 	cfg := ScanConfig{
 		Path:      dir,
 		Recursive: true,
@@ -156,11 +193,15 @@ func TestScanWithExcludePatterns(t *testing.T) {
 }
 
 func TestFindDuplicatesSameSizeDifferentContent(t *testing.T) {
-	dir := testDir("mixed_sizes")
+	dir := createTestDir(t, map[string]string{
+		"large.dat":      strings.Repeat("X", 200000),
+		"large_copy.dat": strings.Repeat("X", 200000),
+		"medium.bin":     strings.Repeat("Y", 200000),
+	})
 	cfg := ScanConfig{
 		Path:      dir,
 		Recursive: true,
-		MinSize:   1024 * 100,
+		MinSize:   1,
 	}
 
 	files, err := Scan(cfg)
@@ -238,5 +279,3 @@ func TestSortGroupsByCount(t *testing.T) {
 			len(groups[0].Files), len(groups[1].Files), len(groups[2].Files))
 	}
 }
-
-

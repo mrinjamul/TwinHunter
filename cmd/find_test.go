@@ -3,7 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
-	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,20 +11,33 @@ import (
 	"github.com/mrinjamul/twinhunter/models"
 )
 
-func testRoot() string {
-	_, file, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(file), "..")
+func createTestDir(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for path, content := range files {
+		fullPath := filepath.Join(dir, path)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
 }
 
 func TestFindAndCleanWorkflow(t *testing.T) {
-	root := testRoot()
-	reportPath := filepath.Join(root, "test_report_workflow.json")
-	defer os.Remove(reportPath)
-
-	dupDir := filepath.Join(root, "test_data", "duplicates")
+	dir := createTestDir(t, map[string]string{
+		"dir_a/photo.jpg":        "duplicate content",
+		"dir_b/photo.jpg":        "duplicate content",
+		"dir_b/backup/photo.jpg": "duplicate content",
+		"dir_a/unique.txt":       "unique one",
+		"dir_b/readme.md":        "another unique",
+	})
+	reportPath := filepath.Join(t.TempDir(), "test_report_workflow.json")
 
 	files, err := core.Scan(core.ScanConfig{
-		Path:      dupDir,
+		Path:      dir,
 		Recursive: true,
 	})
 	if err != nil {
@@ -39,7 +52,7 @@ func TestFindAndCleanWorkflow(t *testing.T) {
 		t.Fatalf("expected 1 group, got %d", len(groups))
 	}
 
-	report := core.BuildReport(files, groups, dupDir)
+	report := core.BuildReport(files, groups, dir)
 	if report.DupFiles != 2 {
 		t.Errorf("expected 2 dup files, got %d", report.DupFiles)
 	}
@@ -59,8 +72,12 @@ func TestFindAndCleanWorkflow(t *testing.T) {
 }
 
 func TestFindWithFilters(t *testing.T) {
-	root := testRoot()
-	mixedDir := filepath.Join(root, "test_data", "mixed_sizes")
+	dir := createTestDir(t, map[string]string{
+		"large.dat":      strings.Repeat("X", 200000),
+		"large_copy.dat": strings.Repeat("X", 200000),
+		"medium.bin":     strings.Repeat("Y", 200000),
+		"small.txt":      "t",
+	})
 
 	tests := []struct {
 		name       string
@@ -70,19 +87,19 @@ func TestFindWithFilters(t *testing.T) {
 	}{
 		{
 			name:       "all files",
-			cfg:        core.ScanConfig{Path: mixedDir, Recursive: true},
+			cfg:        core.ScanConfig{Path: dir, Recursive: true},
 			wantFiles:  4,
 			wantGroups: 1,
 		},
 		{
 			name:       "min size 100k",
-			cfg:        core.ScanConfig{Path: mixedDir, Recursive: true, MinSize: 1024 * 100},
+			cfg:        core.ScanConfig{Path: dir, Recursive: true, MinSize: 1024 * 100},
 			wantFiles:  3,
 			wantGroups: 1,
 		},
 		{
 			name:       "max size 1k",
-			cfg:        core.ScanConfig{Path: mixedDir, Recursive: true, MaxSize: 1024},
+			cfg:        core.ScanConfig{Path: dir, Recursive: true, MaxSize: 1024},
 			wantFiles:  1,
 			wantGroups: 0,
 		},
@@ -107,11 +124,14 @@ func TestFindWithFilters(t *testing.T) {
 }
 
 func TestExcludeDirs(t *testing.T) {
-	root := testRoot()
-	excludeDir := filepath.Join(root, "test_data", "exclude_test")
+	dir := createTestDir(t, map[string]string{
+		".git/config":               "git config",
+		"node_modules/pkg/index.js": "npm stuff",
+		"source/main.go":            "package main",
+	})
 
 	files, err := core.Scan(core.ScanConfig{
-		Path:      excludeDir,
+		Path:      dir,
 		Recursive: true,
 	})
 	if err != nil {
@@ -123,11 +143,10 @@ func TestExcludeDirs(t *testing.T) {
 }
 
 func TestEmptyDirectory(t *testing.T) {
-	root := testRoot()
-	emptyDir := filepath.Join(root, "test_data", "empty_dir")
+	dir := t.TempDir()
 
 	files, err := core.Scan(core.ScanConfig{
-		Path:      emptyDir,
+		Path:      dir,
 		Recursive: true,
 	})
 	if err != nil {
@@ -139,11 +158,13 @@ func TestEmptyDirectory(t *testing.T) {
 }
 
 func TestNonRecursive(t *testing.T) {
-	root := testRoot()
-	dupDir := filepath.Join(root, "test_data", "duplicates")
+	dir := createTestDir(t, map[string]string{
+		"dir_a/photo.jpg": "duplicate content",
+		"dir_b/photo.jpg": "duplicate content",
+	})
 
 	files, err := core.Scan(core.ScanConfig{
-		Path:      dupDir,
+		Path:      dir,
 		Recursive: false,
 	})
 	if err != nil {
@@ -155,11 +176,18 @@ func TestNonRecursive(t *testing.T) {
 }
 
 func TestSortGroups(t *testing.T) {
-	root := testRoot()
-	testDir := filepath.Join(root, "test_data")
+	dir := createTestDir(t, map[string]string{
+		"dir_a/photo.jpg":         "duplicate content",
+		"dir_b/photo.jpg":         "duplicate content",
+		"dir_b/backup/photo.jpg":  "duplicate content",
+		"dir_a/unique.txt":        "unique one",
+		"dir_b/readme.md":         "another unique",
+		"large.dat":               strings.Repeat("X", 200000),
+		"large_copy.dat":          strings.Repeat("X", 200000),
+	})
 
 	files, err := core.Scan(core.ScanConfig{
-		Path:      testDir,
+		Path:      dir,
 		Recursive: true,
 	})
 	if err != nil {
@@ -184,14 +212,18 @@ func TestSortGroups(t *testing.T) {
 }
 
 func TestReportExportImport(t *testing.T) {
-	root := testRoot()
-	reportPath := filepath.Join(root, "test_report_io.json")
-	defer os.Remove(reportPath)
+	dir := createTestDir(t, map[string]string{
+		"dir_a/photo.jpg":        "duplicate content",
+		"dir_b/photo.jpg":        "duplicate content",
+		"dir_b/backup/photo.jpg": "duplicate content",
+		"dir_a/unique.txt":       "unique one",
+		"dir_b/readme.md":        "another unique",
+	})
+	reportPath := filepath.Join(t.TempDir(), "test_report_io.json")
 
-	dupDir := filepath.Join(root, "test_data", "duplicates")
-	files, _ := core.Scan(core.ScanConfig{Path: dupDir, Recursive: true})
+	files, _ := core.Scan(core.ScanConfig{Path: dir, Recursive: true})
 	groups := core.FindDuplicates(files, 2)
-	report := core.BuildReport(files, groups, dupDir)
+	report := core.BuildReport(files, groups, dir)
 
 	if err := core.ExportJSON(report, reportPath); err != nil {
 		t.Fatalf("Export failed: %v", err)
@@ -219,11 +251,14 @@ func TestReportExportImport(t *testing.T) {
 }
 
 func TestKeepStrategyIntegration(t *testing.T) {
-	root := testRoot()
-	dupDir := filepath.Join(root, "test_data", "duplicates")
+	dir := createTestDir(t, map[string]string{
+		"dir_a/photo.jpg":        "duplicate content",
+		"dir_b/photo.jpg":        "duplicate content",
+		"dir_b/backup/photo.jpg": "duplicate content",
+	})
 
 	files, err := core.Scan(core.ScanConfig{
-		Path:      dupDir,
+		Path:      dir,
 		Recursive: true,
 	})
 	if err != nil {
