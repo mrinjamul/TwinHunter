@@ -1,178 +1,505 @@
-/* Package cmd ...
-Copyright © 2021 Injamul Mohammad Mollah <mrinjamul@gmail.com>
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-*/
 package cmd
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
-	"time"
+	"os"
+	"path/filepath"
+	"strings"
 
-	"github.com/briandowns/spinner"
-	"github.com/mrinjamul/go-dupfinder/app"
+	"github.com/mrinjamul/twinhunter/core"
+	"github.com/mrinjamul/twinhunter/models"
+	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
 
-// findCmd represents the find command
-var findCmd = &cobra.Command{
-	Use:   "find",
-	Short: "Find duplicate files",
-	Long:  `Find duplicate files`,
-	Run:   findRun,
-}
-
 var (
-	flagDelete    bool
-	flagSoftLink  bool
-	flagHardLink  bool
-	flagOmitEmpty bool
-	flagRecurse   bool
-	flagExclude   string
+	findRecursive  bool
+	findMinSize    string
+	findMaxSize    string
+	findExclude    string
+	findExcludeRe  string
+	findExcludeDir string
+	findWorkers    int
+	findOutput     string
+	findFormat     string
+	findKeep       string
+	findLink       string
+	findDelete     bool
+	findDryRun     bool
+	findYes        bool
+	findVerbose    bool
+	findSort       string
 )
+
+var findCmd = &cobra.Command{
+	Use:   "find [path]",
+	Short: "Find duplicate files",
+	Long: `Scan a directory for duplicate files.
+If no path is given, the current directory is used.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runFind,
+}
 
 func init() {
 	rootCmd.AddCommand(findCmd)
 
-	// Here you will define your flags and configuration settings.
-
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// findCmd.PersistentFlags().String("foo", "", "A help for foo")
-
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	findCmd.Flags().BoolVarP(&flagDelete, "delete", "d", false, "Find and delete files")
-	findCmd.Flags().BoolVarP(&flagSoftLink, "soft", "s", false, "Find and create soft links")
-	findCmd.Flags().BoolVar(&flagHardLink, "hard", false, "Find and create hard links")
-	findCmd.Flags().BoolVarP(&flagOmitEmpty, "omitempty", "e", false, "Omit empty directories")
-	findCmd.Flags().BoolVarP(&flagRecurse, "recursive", "r", false, "enable recursive file indexing")
-	findCmd.Flags().StringVarP(&flagExclude, "exclude", "x", "", "files to exclude")
-	// findCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	findCmd.Flags().BoolVarP(&findRecursive, "recursive", "r", false, "scan subdirectories recursively")
+	findCmd.Flags().StringVarP(&findMinSize, "min-size", "m", "0", "minimum file size (e.g. 1M, 100K)")
+	findCmd.Flags().StringVarP(&findMaxSize, "max-size", "M", "0", "maximum file size (e.g. 10M)")
+	findCmd.Flags().StringVarP(&findExclude, "exclude", "x", "", "comma-separated glob patterns to exclude")
+	findCmd.Flags().StringVar(&findExcludeRe, "exclude-regex", "", "comma-separated regex patterns to exclude")
+	findCmd.Flags().StringVar(&findExcludeDir, "exclude-dir", "", "comma-separated directory names to skip (default: .git,node_modules,.svn,__pycache__)")
+	findCmd.Flags().IntVarP(&findWorkers, "workers", "w", 0, "number of parallel hashing workers (0 = auto)")
+	findCmd.Flags().StringVarP(&findOutput, "output", "o", "", "export report to file (format auto-detected from extension: .json, .csv, .html)")
+	findCmd.Flags().StringVarP(&findFormat, "format", "f", "pretty", "terminal output: pretty, json, csv, silent")
+	findCmd.Flags().BoolVarP(&findVerbose, "verbose", "v", false, "show detailed per-group output")
+	findCmd.Flags().StringVar(&findSort, "sort", "size", "sort groups by: size, count, path")
+	findCmd.Flags().BoolVarP(&findYes, "yes", "y", false, "skip confirmation prompts")
+	findCmd.Flags().StringVarP(&findKeep, "keep", "k", "", "auto-keep strategy: oldest (default), newest, shortest")
+	findCmd.Flags().StringVarP(&findLink, "link", "l", "", "replace duplicates with links: hard, soft")
+	findCmd.Flags().BoolVarP(&findDelete, "delete", "d", false, "delete duplicate files")
+	findCmd.Flags().BoolVarP(&findDryRun, "dry-run", "n", false, "preview without making changes")
 }
 
-func findRun(cmd *cobra.Command, args []string) {
-	// all files list
-	var allFiles []string
-	// excludeFiles []string
-	var excludeFiles []string
-	// unique files list
-	var uniqueFiles []string
-	// duplicate files list
-	var duplicateFiles []string
-	// unique hashes
-	var uniqueHash []string
-	// hash Maps
-	var hashMap = make(map[string]string)
-
-	// check if exclude flag is set
-	if flagExclude != "" {
-		excludeFiles = app.GetExcludeFiles(flagExclude)
+func runFind(cmd *cobra.Command, args []string) error {
+	path := "."
+	if len(args) > 0 {
+		path = args[0]
 	}
 
-	// check if argument exist or not
-	if len(args) == 0 {
-		fmt.Println("Please provide a path")
-		return
-	}
-	// chech if argument is a valid path
-	if _, err := app.IsValidPath(args[0]); err != nil {
-		fmt.Println(err)
-		return
-	}
-	// check if argument is more than 1
-	if len(args) > 1 {
-		fmt.Println("Please provide only one path")
-		return
-	}
-
-	// get path
-	path := args[0]
-
-	//
-	spinIndex := spinner.New(spinner.CharSets[11], 100*time.Millisecond) // Build our new spinner
-	spinIndex.Suffix = " Indexing folder and files..."
-	spinIndex.FinalMSG = "\nProcess Complete !\n"
-	spinIndex.Color("green", "bold") // Set the spinner color to a bold green
-	spinIndex.Start()                // Start the spinner
-	// get all files from the given path
-	allFiles, err := app.GetFiles(path, flagRecurse)
+	absPath, err := filepath.Abs(path)
 	if err != nil {
-		fmt.Println(err)
-		return
+		return fmt.Errorf("invalid path: %w", err)
 	}
-	spinIndex.Stop() // stop indexing spinner
 
-	// print finding duplicates
-	spin := spinner.New(spinner.CharSets[11], 100*time.Millisecond) // Build our new spinner
-	spin.Suffix = " Finding Duplicate files..."
-	spin.FinalMSG = "\nProcess Complete !\n"
-	spin.Color("green", "bold") // Set the spinner color to a bold green
-	spin.Start()                // Start the spinner
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		return fmt.Errorf("path does not exist: %s", absPath)
+	}
 
-	for _, file := range allFiles {
-		excluded := app.IsExcluded(file, excludeFiles, flagOmitEmpty)
-		if excluded {
-			continue
-		}
-		sum, err := app.Sha256sum(file)
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-		if !app.ContainsString(uniqueHash, sum) {
-			uniqueHash = append(uniqueHash, sum)
-			hashMap[sum] = file
+	return runFindCLI(cmd, absPath)
+}
+
+func runFindCLI(cmd *cobra.Command, path string) error {
+	minSize := parseSize(findMinSize)
+	maxSize := parseSize(findMaxSize)
+	exclude := splitCSV(findExclude)
+	excludeRe := splitCSV(findExcludeRe)
+	excludeDir := splitCSV(findExcludeDir)
+
+	if findKeep != "" {
+		switch findKeep {
+		case "oldest", "newest", "shortest":
+		default:
+			return fmt.Errorf("invalid keep strategy: %q (valid: oldest, newest, shortest)", findKeep)
 		}
 	}
 
-	spin.Stop() // stop the spinner
-
-	uniqueFiles = app.GetUniqueFiles(hashMap, uniqueHash)
-	duplicateFiles = app.GetDuplicateFiles(allFiles, uniqueFiles)
-
-	// Print file statistics
-	fmt.Println("Total file(s):", (len(allFiles)),
-		" Unique file(s):", len(uniqueFiles),
-		" Duplicate file(s):", len(duplicateFiles))
-
-	// print duplicate files
-	if len(duplicateFiles) != 0 {
-		if ok := app.Confirm("Press y to view duplicate file(s)"); ok {
-			app.PrintFiles(duplicateFiles)
-		}
-	}
-	// print unique file(s)
-	if len(duplicateFiles) != 0 {
-		if ok := app.Confirm("Press y to view unique file(s)"); ok {
-			app.PrintFiles(uniqueFiles)
-		}
+	cfg := core.ScanConfig{
+		Path:         path,
+		Recursive:    findRecursive,
+		MinSize:      minSize,
+		MaxSize:      maxSize,
+		Exclude:      exclude,
+		ExcludeRegex: excludeRe,
+		ExcludeDir:   excludeDir,
+		Workers:      findWorkers,
 	}
 
-	// For flagDelete
-	if flagDelete {
-		app.DeleteAllFiles(duplicateFiles)
-	} else if len(duplicateFiles) != 0 {
-		// prompt to ask user if want to remove duplicates
-		ok := app.Confirm("Do you want to delete duplicate files? (y/n)")
-		if ok {
-			app.DeleteAllFiles(duplicateFiles)
+	var bar *progressbar.ProgressBar
+	if findFormat == "pretty" {
+		fmt.Printf("Scanning: %s\n", path)
+		if findRecursive {
+			fmt.Println("Mode: recursive")
+		}
+		fmt.Println("Discovering files...")
+		bar = progressbar.NewOptions(-1,
+			progressbar.OptionSetDescription("Scanning files..."),
+			progressbar.OptionSetWriter(os.Stderr),
+			progressbar.OptionShowCount(),
+			progressbar.OptionSetTheme(progressbar.Theme{Saucer: "█", SaucerPadding: " ", BarStart: "[", BarEnd: "]"}),
+		)
+		cfg.OnProgress = func(stats models.ScanStats) {
+			bar.Set(stats.FilesScanned)
+		}
+	}
+
+	allFiles, err := core.Scan(cfg)
+	if err != nil {
+		return fmt.Errorf("scan error: %w", err)
+	}
+
+	if findFormat == "pretty" {
+		bar.Finish()
+		fmt.Fprintln(os.Stderr)
+		hardLinks := core.CountHardLinks(allFiles)
+		fmt.Printf("Found %d files (%s)", len(allFiles), core.FormatSize(totalSize(allFiles)))
+		if hardLinks > 0 {
+			fmt.Printf(" (%d hard links)", hardLinks)
+		}
+		fmt.Println(". Finding duplicates...")
+	}
+
+	groups := core.FindDuplicates(allFiles, findWorkers)
+
+	if findSort == "count" {
+		core.SortGroupsByCount(groups)
+	} else if findSort == "path" {
+		core.SortGroupsByPath(groups)
+	} else {
+		core.SortGroupsBySize(groups)
+	}
+
+	report := core.BuildReport(allFiles, groups, path)
+
+	if findFormat == "json" {
+		data, _ := json.MarshalIndent(report, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	if findFormat == "csv" {
+		printCSV(report)
+		return nil
+	}
+
+	if findFormat == "silent" {
+		return nil
+	}
+
+	printReport(report)
+
+	if len(groups) == 0 {
+		fmt.Println("\nNo duplicates found.")
+		return nil
+	}
+
+	if findOutput != "" {
+		ext := strings.ToLower(filepath.Ext(findOutput))
+		var exportErr error
+		switch ext {
+		case ".csv":
+			exportErr = core.ExportCSV(report, findOutput)
+		case ".html", ".htm":
+			exportErr = core.ExportHTML(report, findOutput)
+		default:
+			exportErr = core.ExportJSON(report, findOutput)
+		}
+		if exportErr != nil {
+			fmt.Fprintf(os.Stderr, "Error writing report: %v\n", exportErr)
+		} else {
+			fmt.Printf("\nReport saved to: %s\n", findOutput)
+		}
+	}
+
+	if findDryRun {
+		fmt.Println("\n[DRY RUN] No changes made.")
+		return nil
+	}
+
+	if findDelete || findLink != "" {
+		if findKeep == "" {
+			findKeep = "oldest"
+		}
+		return applyActionsCLI(groups)
+	}
+
+	if findFormat == "pretty" && !findYes {
+		promptActionCLI(groups)
+	}
+
+	return nil
+}
+
+func applyActionsCLI(groups []models.DuplicateGroup) error {
+	var action core.Action
+	actionName := ""
+	switch {
+	case findDelete:
+		action = core.ActionDelete
+		actionName = "delete"
+	case findLink == "hard":
+		action = core.ActionHardLink
+		actionName = "hard-link"
+	case findLink == "soft":
+		action = core.ActionSoftLink
+		actionName = "soft-link"
+	default:
+		return nil
+	}
+
+	totalActions := 0
+	for _, g := range groups {
+		_, toRemove := core.ApplyKeepStrategy(g, findKeep)
+		totalActions += len(toRemove)
+	}
+
+	if findFormat == "pretty" {
+		fmt.Printf("\nAction: %s %d duplicate files\n", actionName, totalActions)
+		fmt.Printf("Strategy: keep %s\n", findKeep)
+	}
+
+	if !findYes && !findDryRun {
+		var response string
+		fmt.Print("\nProceed? (y/N): ")
+		fmt.Scanln(&response)
+		if strings.ToLower(response) != "y" && strings.ToLower(response) != "yes" {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+	}
+
+	var successCount, errorCount int
+	for _, g := range groups {
+		keep, toRemove := core.ApplyKeepStrategy(g, findKeep)
+		for _, dup := range toRemove {
+			if findDryRun {
+				if findFormat == "pretty" {
+					fmt.Printf("Would remove: %s\n", dup.Path)
+				}
+				successCount++
+				continue
+			}
+
+			if findFormat == "pretty" || findVerbose {
+				if findDelete {
+					fmt.Printf("Deleting: %s\n", dup.Path)
+				} else {
+					fmt.Printf("Linking: %s -> %s\n", dup.Path, keep.Path)
+				}
+			}
+
+			if err := core.ApplyAction(action, keep, dup, ""); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				errorCount++
+			} else {
+				successCount++
+			}
+		}
+	}
+
+	if findFormat == "pretty" && !findDryRun {
+		fmt.Printf("\nDone. %d succeeded, %d failed.\n", successCount, errorCount)
+	} else if findDryRun {
+		fmt.Printf("\n[DRY RUN] Would process %d files.\n", successCount)
+	}
+
+	return nil
+}
+
+func promptActionCLI(groups []models.DuplicateGroup) error {
+	if len(groups) == 0 || findYes {
+		return nil
+	}
+
+	var totalActions int
+	for _, g := range groups {
+		_, toRemove := core.ApplyKeepStrategy(g, "oldest")
+		totalActions += len(toRemove)
+	}
+
+	scanner := bufio.NewScanner(os.Stdin)
+
+	fmt.Println()
+	fmt.Println("Select action:")
+	fmt.Println("  1) Delete duplicates")
+	fmt.Println("  2) Replace with hard links")
+	fmt.Println("  3) Replace with soft links")
+	fmt.Println("  4) Skip")
+	fmt.Print("\nChoice [1-4, Enter=4]: ")
+
+	actionChosen := false
+	for {
+		if !scanner.Scan() {
+			return nil
+		}
+		input := strings.TrimSpace(scanner.Text())
+
+		if input == "" || input == "4" {
+			return nil
+		}
+		if input == "1" {
+			findDelete = true
+			actionChosen = true
+			break
+		}
+		if input == "2" {
+			findLink = "hard"
+			actionChosen = true
+			break
+		}
+		if input == "3" {
+			findLink = "soft"
+			actionChosen = true
+			break
+		}
+		fmt.Print("Invalid choice. Enter 1-4 [Enter=4]: ")
+	}
+
+	if !actionChosen {
+		return nil
+	}
+
+	if findKeep == "" {
+		fmt.Println()
+		fmt.Println("Keep strategy:")
+		fmt.Println("  1) Oldest")
+		fmt.Println("  2) Newest")
+		fmt.Println("  3) Shortest path")
+		fmt.Print("\nChoice [1-3, Enter=1]: ")
+
+		for {
+			if !scanner.Scan() {
+				break
+			}
+			input := strings.TrimSpace(scanner.Text())
+			if input == "" || input == "1" {
+				findKeep = "oldest"
+				break
+			}
+			if input == "2" {
+				findKeep = "newest"
+				break
+			}
+			if input == "3" {
+				findKeep = "shortest"
+				break
+			}
+			fmt.Print("Invalid choice. Enter 1-3 [Enter=1]: ")
+		}
+	}
+
+	fmt.Println()
+	fmt.Printf("Will %s %d duplicate files (keep %s)\n", getActionLabel(), totalActions, findKeep)
+	fmt.Print("\nProceed? [y/N]: ")
+
+	if !scanner.Scan() {
+		return nil
+	}
+	confirm := strings.TrimSpace(strings.ToLower(scanner.Text()))
+	if confirm != "y" && confirm != "yes" {
+		fmt.Println("Cancelled.")
+		return nil
+	}
+
+	findYes = true
+	return applyActionsCLI(groups)
+}
+
+func getActionLabel() string {
+	if findDelete {
+		return "delete"
+	}
+	if findLink == "hard" {
+		return "hard-link"
+	}
+	return "soft-link"
+}
+
+func printReport(report models.Report) {
+	fmt.Println()
+	fmt.Printf("Duplicate Groups: %d\n", len(report.DupGroups))
+	fmt.Printf("Duplicate Files:  %d\n", report.DupFiles)
+	fmt.Printf("Wasted Space:     %s\n", core.FormatSize(report.WastedSpace))
+	if report.TotalSize > 0 {
+		pct := float64(report.WastedSpace) / float64(report.TotalSize) * 100
+		fmt.Printf("Recoverable:      %.1f%%\n", pct)
+	}
+	fmt.Println()
+
+	if findVerbose {
+		for i, g := range report.DupGroups {
+			fmt.Printf("Group %d — %d copies, %s each (hash: %s)\n", i+1, len(g.Files), core.FormatSize(g.Size), g.Hash[:16]+"...")
+			for j, f := range g.Files {
+				prefix := "  dup"
+				if j == 0 {
+					prefix = "  keep"
+				}
+				modTime := f.ModTime.Format("2006-01-02 15:04:05")
+				fmt.Printf("  [%s] %s  (%s, %s)\n", prefix, f.Path, core.FormatSize(f.Size), modTime)
+			}
+			fmt.Println()
+		}
+	} else {
+		showCount := len(report.DupGroups)
+		if showCount > 20 {
+			showCount = 20
+		}
+		for i := 0; i < showCount; i++ {
+			g := report.DupGroups[i]
+			fmt.Printf("Group %d — %d copies, %s each\n", i+1, len(g.Files), core.FormatSize(g.Size))
+			for j, f := range g.Files {
+				prefix := "  dup"
+				if j == 0 {
+					prefix = "  keep"
+				}
+				fmt.Printf("  [%s] %s\n", prefix, f.Path)
+			}
+			fmt.Println()
+		}
+		if len(report.DupGroups) > 20 {
+			fmt.Printf("... and %d more groups. Use -v for full output.\n", len(report.DupGroups)-20)
+			fmt.Println()
+		}
+	}
+}
+
+func parseSize(s string) int64 {
+	if s == "" || s == "0" {
+		return 0
+	}
+	s = strings.TrimSpace(s)
+	last := strings.ToLower(s[len(s)-1:])
+
+	switch last {
+	case "k":
+		var n int64
+		fmt.Sscanf(s[:len(s)-1], "%d", &n)
+		return n * 1024
+	case "m":
+		var n int64
+		fmt.Sscanf(s[:len(s)-1], "%d", &n)
+		return n * 1024 * 1024
+	case "g":
+		var n int64
+		fmt.Sscanf(s[:len(s)-1], "%d", &n)
+		return n * 1024 * 1024 * 1024
+	default:
+		var n int64
+		fmt.Sscanf(s, "%d", &n)
+		return n
+	}
+}
+
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+func totalSize(files []models.FileInfo) int64 {
+	var total int64
+	for _, f := range files {
+		total += f.Size
+	}
+	return total
+}
+
+func printCSV(report models.Report) {
+	fmt.Printf("group,hash,size,path,is_duplicate,mod_time\n")
+	for gi, g := range report.DupGroups {
+		for fi, f := range g.Files {
+			fmt.Printf("%d,%s,%d,%s,%t,%s\n", gi+1, g.Hash, f.Size, f.Path, fi > 0, f.ModTime.Format("2006-01-02 15:04:05"))
 		}
 	}
 }

@@ -1,5 +1,7 @@
 # GoReleaser config
 
+version: 2
+
 before:
   hooks:
     - go mod tidy
@@ -7,7 +9,7 @@ before:
 builds:
   - env:
       - CGO_ENABLED=0
-    ldflags: -X github.com/mrinjamul/go-dupfinder/app.Version={{ .Tag }} -X github.com/mrinjamul/go-dupfinder/app.GitCommit={{ .FullCommit }} -s -w
+    ldflags: -X github.com/mrinjamul/twinhunter/app.Version={{ .Tag }} -X github.com/mrinjamul/twinhunter/app.GitCommit={{ .FullCommit }} -s -w
     goos:
       - linux
       - windows
@@ -30,9 +32,9 @@ builds:
 
 nfpms:
   - vendor: mrinjamul
-    homepage: https://github.com/mrinjamul/go-dupfinder
+    homepage: https://github.com/mrinjamul/twinhunter
     maintainer: "Injamul M <mrinjamul@gmail.com>"
-    description: "Duplicate File Finder"
+    description: "Fast duplicate file finder and cleaner CLI"
     license: MIT
     formats:
       - apk
@@ -44,9 +46,9 @@ brews:
       owner: mrinjamul
       name: homebrew-main
       branch: main
-    homepage: https://github.com/mrinjamul/go-dupfinder
-    description: "Duplicate File Finder"
-    license: ""
+    homepage: https://github.com/mrinjamul/twinhunter
+    description: "Fast duplicate file finder and cleaner CLI"
+    license: "MIT"
     commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
     folder: Formula
 
@@ -71,9 +73,6 @@ changelog:
       order: 10
     - title: Others
       order: 999
-# dockers:
-#   - image_templates:
-#     - "username/image:{{ .Tag }}"
 
 release:
   footer: |
