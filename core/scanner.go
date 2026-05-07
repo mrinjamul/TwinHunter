@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 
 	"github.com/mrinjamul/twinhunter/filters"
 	"github.com/mrinjamul/twinhunter/models"
@@ -66,15 +65,6 @@ func Scan(cfg ScanConfig) ([]models.FileInfo, error) {
 
 	return allFiles, nil
 }
-
-func detectHardLink(info fs.FileInfo) bool {
-	switch st := info.Sys().(type) {
-	case *syscall.Stat_t:
-		return st.Nlink > 1
-	}
-	return false
-}
-
 func walkDir(root string, recursive bool, excludeDirs, excludePatterns, excludeRegex []string, minSize, maxSize int64, fn func(string, fs.FileInfo)) error {
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
