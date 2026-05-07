@@ -1,25 +1,27 @@
 name: twinhunter
-base: core18 # the base snap is the execution environment for this snap
-version: "0.1.3"
+base: core24
+version: "1.0.0"
 summary: A Simple duplicate file finder
 description: |
-  A Simple duplicate file finder.
+  A CLI tool to find and clean duplicate files.
 
 grade: stable
 confinement: strict
 
 apps:
   twinhunter:
-    command: twinhunter
+    # The go plugin places binaries in bin/
+    # This must match the module name in your go.mod
+    command: bin/twinhunter
+    plugs:
+      - home
+      - removable-media
 
 parts:
   twinhunter:
     plugin: go
     source: .
-    go-importpath: twinhunter
-
-plugs:
-  twinhunter-home:
-    interface: home
-  twinhunter-removable-media:
-    interface: removable-media
+    # This automatically runs go install ./...
+    # and places the results in the correct internal directories
+    build-snaps:
+      - go/latest/stable
