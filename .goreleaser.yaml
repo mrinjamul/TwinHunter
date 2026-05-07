@@ -1,6 +1,10 @@
 # GoReleaser config
+# vim: set ts=2 sw=2 tw=0 fo=cnqoj
 
 version: 2
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
 
 before:
   hooks:
@@ -9,7 +13,10 @@ before:
 builds:
   - env:
       - CGO_ENABLED=0
-    ldflags: -X github.com/mrinjamul/twinhunter/app.Version={{ .Tag }} -X github.com/mrinjamul/twinhunter/app.GitCommit={{ .FullCommit }} -s -w
+    ldflags: >
+      -X github.com/mrinjamul/twinhunter/cmd.Version={{ .Tag }}
+      -X github.com/mrinjamul/twinhunter/cmd.GitCommit={{ .FullCommit }}
+      -s -w
     goos:
       - linux
       - windows
@@ -30,6 +37,19 @@ builds:
       - goos: windows
         goarm: "7"
 
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
 nfpms:
   - vendor: mrinjamul
     homepage: https://github.com/mrinjamul/twinhunter
@@ -41,8 +61,9 @@ nfpms:
       - deb
       - rpm
 
-brews:
-  - tap:
+homebrew_casks:
+  - name: twinhunter
+    repository:
       owner: mrinjamul
       name: homebrew-main
       branch: main
@@ -50,13 +71,10 @@ brews:
     description: "Fast duplicate file finder and cleaner CLI"
     license: "MIT"
     commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
-    folder: Formula
+    directory: Casks
 
 checksum:
   name_template: "checksums.txt"
-
-snapshot:
-  name_template: "{{ incpatch .Version }}-dev"
 
 changelog:
   sort: asc
