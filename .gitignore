@@ -18,6 +18,17 @@
 go-dupfinder*
 twinhunter*
 test_data
+*.jpg
+*.mp3
+*.mp4
+*.pdf
+*.md
+*.sh
+*.html
+*.json
+*.csv
+!docs/**/*.md
+
 
 # Dependency directories (remove the comment below to include it)
 # vendor/

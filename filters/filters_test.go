@@ -8,7 +8,7 @@ func TestDefaultExcludes(t *testing.T) {
 		t.Error("default excludes should not be empty")
 	}
 
-	expected := []string{".git", "node_modules", ".svn", "__pycache__", ".DS_Store", "Thumbs.db"}
+	expected := []string{".git", "node_modules", ".svn", "__pycache__"}
 	for i, e := range expected {
 		if excludes[i] != e {
 			t.Errorf("expected default exclude[%d] = %q, got %q", i, e, excludes[i])
@@ -24,8 +24,9 @@ func TestMatchExclude(t *testing.T) {
 	}{
 		{"/path/to/.git/config", []string{".git"}, true},
 		{"/path/to/node_modules/pkg", []string{"node_modules"}, true},
-		{"/path/to/file.txt", []string{".txt"}, true},
+		{"/path/to/file.txt", []string{"file.txt"}, true},
 		{"/path/to/file.txt", []string{".git", "node_modules"}, false},
+		{"/path/to/file.txt", []string{".txt"}, false},
 		{"/path/to/file.py", []string{"*.py"}, true},
 		{"/path/to/file.txt", []string{""}, false},
 		{"/path/to/file.txt", nil, false},

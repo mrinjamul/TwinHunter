@@ -44,7 +44,7 @@ func GroupByHash(annotated []AnnotatedFile) map[string][]models.FileInfo {
 
 // FindDuplicates runs the full two-stage dedup pipeline:
 // size grouping → Blake3 → SHA256 verification → duplicate groups.
-func FindDuplicates(files []models.FileInfo, workers int) []models.DuplicateGroup {
+func FindDuplicates(files []models.FileInfo, workers int, onProgress func(HashProgress)) []models.DuplicateGroup {
 	sizeGroups := GroupBySize(files)
 
 	var candidates []models.FileInfo
@@ -56,17 +56,13 @@ func FindDuplicates(files []models.FileInfo, workers int) []models.DuplicateGrou
 		return nil
 	}
 
-	blake3Results := AnnotateFiles(candidates, "blake3", workers)
+	blake3Results := AnnotateFiles(candidates, "blake3", workers, onProgress)
 	blake3Matches := GroupByHash(blake3Results)
 
 	var verifiedGroups []models.DuplicateGroup
 
 	for _, group := range blake3Matches {
-		if len(group) < 2 {
-			continue
-		}
-
-		shaResults := AnnotateFiles(group, "sha256", workers)
+		shaResults := AnnotateFiles(group, "sha256", workers, onProgress)
 		shaMap := make(map[string][]models.FileInfo)
 		for _, sr := range shaResults {
 			if sr.Hash == "" {
@@ -115,8 +111,11 @@ func SortGroupsByPath(groups []models.DuplicateGroup) {
 
 // ApplyKeepStrategy selects which file to keep and which to remove.
 func ApplyKeepStrategy(group models.DuplicateGroup, strategy string) (keep models.FileInfo, toRemove []models.FileInfo) {
-	if len(group.Files) < 2 {
-		return models.FileInfo{}, group.Files
+	if len(group.Files) == 0 {
+		return models.FileInfo{}, nil
+	}
+	if len(group.Files) == 1 {
+		return group.Files[0], nil
 	}
 
 	sorted := make([]models.FileInfo, len(group.Files))
@@ -125,14 +124,23 @@ func ApplyKeepStrategy(group models.DuplicateGroup, strategy string) (keep model
 	switch strategy {
 	case "oldest":
 		sort.Slice(sorted, func(i, j int) bool {
+			if sorted[i].ModTime.Equal(sorted[j].ModTime) {
+				return len(sorted[i].Path) < len(sorted[j].Path)
+			}
 			return sorted[i].ModTime.Before(sorted[j].ModTime)
 		})
 	case "newest":
 		sort.Slice(sorted, func(i, j int) bool {
+			if sorted[i].ModTime.Equal(sorted[j].ModTime) {
+				return len(sorted[i].Path) < len(sorted[j].Path)
+			}
 			return sorted[i].ModTime.After(sorted[j].ModTime)
 		})
 	case "shortest":
 		sort.Slice(sorted, func(i, j int) bool {
+			if len(sorted[i].Path) == len(sorted[j].Path) {
+				return sorted[i].ModTime.Before(sorted[j].ModTime)
+			}
 			return len(sorted[i].Path) < len(sorted[j].Path)
 		})
 	default:

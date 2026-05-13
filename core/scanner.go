@@ -1,11 +1,11 @@
 package core
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"github.com/mrinjamul/twinhunter/filters"
 	"github.com/mrinjamul/twinhunter/models"
@@ -27,6 +27,8 @@ type ScanConfig struct {
 // Scan discovers files using filepath.WalkDir for better performance,
 // applies filters, and returns a list of FileInfo.
 func Scan(cfg ScanConfig) ([]models.FileInfo, error) {
+	// nil means "not set" — apply defaults.
+	// non-nil empty slice means "explicitly set to empty" — no defaults.
 	if cfg.ExcludeDir == nil {
 		cfg.ExcludeDir = filters.DefaultExcludes()
 	}
@@ -68,6 +70,7 @@ func Scan(cfg ScanConfig) ([]models.FileInfo, error) {
 func walkDir(root string, recursive bool, excludeDirs, excludePatterns, excludeRegex []string, minSize, maxSize int64, fn func(string, fs.FileInfo)) error {
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: error accessing %s: %v\n", path, err)
 			return nil
 		}
 
@@ -77,7 +80,7 @@ func walkDir(root string, recursive bool, excludeDirs, excludePatterns, excludeR
 			}
 			name := d.Name()
 			for _, pattern := range excludeDirs {
-				if name == pattern || strings.Contains(name, pattern) {
+				if name == pattern {
 					return filepath.SkipDir
 				}
 			}
@@ -88,15 +91,8 @@ func walkDir(root string, recursive bool, excludeDirs, excludePatterns, excludeR
 			return nil
 		}
 
-		name := d.Name()
-		for _, pattern := range excludePatterns {
-			matched, _ := filepath.Match(pattern, name)
-			if matched {
-				return nil
-			}
-			if strings.Contains(name, pattern) {
-				return nil
-			}
+		if filters.MatchExclude(d.Name(), excludePatterns) {
+			return nil
 		}
 
 		for _, pattern := range excludeRegex {
@@ -107,6 +103,7 @@ func walkDir(root string, recursive bool, excludeDirs, excludePatterns, excludeR
 
 		info, err := d.Info()
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to read file info for %s: %v\n", path, err)
 			return nil
 		}
 

@@ -47,7 +47,7 @@ func TestFindAndCleanWorkflow(t *testing.T) {
 		t.Errorf("expected 5 files, got %d", len(files))
 	}
 
-	groups := core.FindDuplicates(files, 2)
+	groups := core.FindDuplicates(files, 2, nil)
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 group, got %d", len(groups))
 	}
@@ -115,7 +115,7 @@ func TestFindWithFilters(t *testing.T) {
 				t.Errorf("got %d files, want %d", len(files), tt.wantFiles)
 			}
 
-			groups := core.FindDuplicates(files, 2)
+			groups := core.FindDuplicates(files, 2, nil)
 			if len(groups) != tt.wantGroups {
 				t.Errorf("got %d groups, want %d", len(groups), tt.wantGroups)
 			}
@@ -194,7 +194,7 @@ func TestSortGroups(t *testing.T) {
 		t.Fatalf("Scan error: %v", err)
 	}
 
-	groups := core.FindDuplicates(files, 2)
+	groups := core.FindDuplicates(files, 2, nil)
 
 	core.SortGroupsBySize(groups)
 	for i := 0; i < len(groups)-1; i++ {
@@ -222,7 +222,7 @@ func TestReportExportImport(t *testing.T) {
 	reportPath := filepath.Join(t.TempDir(), "test_report_io.json")
 
 	files, _ := core.Scan(core.ScanConfig{Path: dir, Recursive: true})
-	groups := core.FindDuplicates(files, 2)
+	groups := core.FindDuplicates(files, 2, nil)
 	report := core.BuildReport(files, groups, dir)
 
 	if err := core.ExportJSON(report, reportPath); err != nil {
@@ -265,7 +265,7 @@ func TestKeepStrategyIntegration(t *testing.T) {
 		t.Fatalf("Scan failed: %v", err)
 	}
 
-	groups := core.FindDuplicates(files, 2)
+	groups := core.FindDuplicates(files, 2, nil)
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 group, got %d", len(groups))
 	}
@@ -297,5 +297,104 @@ func TestKeepStrategyIntegration(t *testing.T) {
 		if len(toRemove) != tt.wantDrop {
 			t.Errorf("%s: want %d to drop, got %d", tt.strategy, tt.wantDrop, len(toRemove))
 		}
+	}
+}
+
+func TestParseSize(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+		wantErr  bool
+	}{
+		{"", 0, false},
+		{"0", 0, false},
+		{"100", 100, false},
+		{"500", 500, false},
+		{"1K", 1024, false},
+		{"1k", 1024, false},
+		{"2K", 2 * 1024, false},
+		{"1M", 1024 * 1024, false},
+		{"1m", 1024 * 1024, false},
+		{"2M", 2 * 1024 * 1024, false},
+		{"1G", 1024 * 1024 * 1024, false},
+		{"1g", 1024 * 1024 * 1024, false},
+		{"1T", 1024 * 1024 * 1024 * 1024, false},
+		{"1t", 1024 * 1024 * 1024 * 1024, false},
+		{"0K", 0, false},
+		{"0M", 0, false},
+		{"0G", 0, false},
+		{"0T", 0, false},
+		{"  2M  ", 2 * 1024 * 1024, false},
+		{"abc", 0, true},
+		{"1X", 0, true},
+		{"-1", 0, true},
+	}
+
+	for _, tt := range tests {
+		got, err := parseSize(tt.input)
+		if tt.wantErr {
+			if err == nil {
+				t.Errorf("parseSize(%q) expected error, got %d", tt.input, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseSize(%q) unexpected error: %v", tt.input, err)
+			continue
+		}
+		if got != tt.expected {
+			t.Errorf("parseSize(%q) = %d, want %d", tt.input, got, tt.expected)
+		}
+	}
+}
+
+func TestSplitCSV(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected []string
+	}{
+		{"", nil},
+		{"a", []string{"a"}},
+		{"a,b,c", []string{"a", "b", "c"}},
+		{" a , b , c ", []string{"a", "b", "c"}},
+		{"a,,c", []string{"a", "c"}},
+		{"a, ,c", []string{"a", "c"}},
+		{",,,", nil},
+	}
+
+	for _, tt := range tests {
+		got := splitCSV(tt.input)
+		if len(got) != len(tt.expected) {
+			t.Errorf("splitCSV(%q) = %v, want %v", tt.input, got, tt.expected)
+			continue
+		}
+		for i, v := range tt.expected {
+			if got[i] != v {
+				t.Errorf("splitCSV(%q)[%d] = %q, want %q", tt.input, i, got[i], v)
+			}
+		}
+	}
+}
+
+func TestTotalSize(t *testing.T) {
+	files := []models.FileInfo{
+		{Size: 100},
+		{Size: 200},
+		{Size: 300},
+	}
+
+	got := totalSize(files)
+	if got != 600 {
+		t.Errorf("totalSize = %d, want 600", got)
+	}
+
+	gotEmpty := totalSize([]models.FileInfo{})
+	if gotEmpty != 0 {
+		t.Errorf("totalSize(empty) = %d, want 0", gotEmpty)
+	}
+
+	gotNil := totalSize(nil)
+	if gotNil != 0 {
+		t.Errorf("totalSize(nil) = %d, want 0", gotNil)
 	}
 }

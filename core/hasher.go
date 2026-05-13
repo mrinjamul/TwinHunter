@@ -7,10 +7,18 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"sync/atomic"
 
 	"github.com/mrinjamul/twinhunter/models"
 	"github.com/zeebo/blake3"
 )
+
+// HashProgress is passed to onProgress callbacks during hashing.
+type HashProgress struct {
+	Current int
+	Total   int
+	Phase   string
+}
 
 // HashBlake3 computes the Blake3 hash of a file.
 func HashBlake3(path string) (string, error) {
@@ -51,7 +59,7 @@ type HashResult struct {
 
 // HashPipeline hashes a list of files concurrently using the given algorithm.
 // algorithm: "blake3" or "sha256"
-func HashPipeline(paths []string, algorithm string, workers int) []HashResult {
+func HashPipeline(paths []string, algorithm string, workers int, onProgress func(HashProgress)) []HashResult {
 	if workers <= 0 {
 		workers = runtime.NumCPU()
 	}
@@ -62,6 +70,8 @@ func HashPipeline(paths []string, algorithm string, workers int) []HashResult {
 	results := make([]HashResult, len(paths))
 	sem := make(chan struct{}, workers)
 	done := make(chan struct{})
+
+	var processed int64
 
 	type work struct {
 		idx  int
@@ -87,6 +97,10 @@ func HashPipeline(paths []string, algorithm string, workers int) []HashResult {
 					hash, err = HashBlake3(w.path)
 				}
 				results[w.idx] = HashResult{Path: w.path, Hash: hash, Err: err}
+				if onProgress != nil {
+					cur := atomic.AddInt64(&processed, 1)
+					onProgress(HashProgress{Current: int(cur), Total: len(paths), Phase: algorithm})
+				}
 				<-sem
 			}
 			done <- struct{}{}
@@ -107,16 +121,19 @@ type AnnotatedFile struct {
 }
 
 // AnnotateFiles adds hashes to file infos concurrently.
-func AnnotateFiles(files []models.FileInfo, algorithm string, workers int) []AnnotatedFile {
+func AnnotateFiles(files []models.FileInfo, algorithm string, workers int, onProgress func(HashProgress)) []AnnotatedFile {
 	paths := make([]string, len(files))
 	for i, f := range files {
 		paths[i] = f.Path
 	}
 
-	hashResults := HashPipeline(paths, algorithm, workers)
+	hashResults := HashPipeline(paths, algorithm, workers, onProgress)
 
 	annotated := make([]AnnotatedFile, len(files))
 	for i, hr := range hashResults {
+		if hr.Err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to hash %s: %v\n", hr.Path, hr.Err)
+		}
 		annotated[i] = AnnotatedFile{
 			File: files[i],
 			Hash: hr.Hash,

@@ -49,7 +49,7 @@ func TestScanDuplicates(t *testing.T) {
 		t.Errorf("expected 5 files, got %d", len(files))
 	}
 
-	groups := FindDuplicates(files, 2)
+	groups := FindDuplicates(files, 2, nil)
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 duplicate group, got %d", len(groups))
 	}
@@ -209,7 +209,7 @@ func TestFindDuplicatesSameSizeDifferentContent(t *testing.T) {
 		t.Fatalf("Scan error: %v", err)
 	}
 
-	groups := FindDuplicates(files, 2)
+	groups := FindDuplicates(files, 2, nil)
 
 	found := false
 	for _, g := range groups {
@@ -277,5 +277,175 @@ func TestSortGroupsByCount(t *testing.T) {
 	if len(groups[0].Files) != 4 || len(groups[1].Files) != 3 || len(groups[2].Files) != 2 {
 		t.Errorf("expected [4, 3, 2] files, got [%d, %d, %d]",
 			len(groups[0].Files), len(groups[1].Files), len(groups[2].Files))
+	}
+}
+
+func TestScan_CustomExcludeDir(t *testing.T) {
+	dir := createTestDir(t, map[string]string{
+		"custom_cache/data.txt":  "cache content",
+		"source/main.go":         "package main",
+		"source/other.txt":       "other content",
+	})
+
+	cfg := ScanConfig{
+		Path:        dir,
+		Recursive:   true,
+		ExcludeDir:  []string{"custom_cache"},
+	}
+
+	files, err := Scan(cfg)
+	if err != nil {
+		t.Fatalf("Scan error: %v", err)
+	}
+
+	if len(files) != 2 {
+		t.Errorf("expected 2 files (custom_cache excluded), got %d", len(files))
+	}
+
+	for _, f := range files {
+		if strings.Contains(f.Path, "custom_cache") {
+			t.Errorf("custom_cache should be excluded, but found: %s", f.Path)
+		}
+	}
+}
+
+func TestScan_ExcludeRegex(t *testing.T) {
+	dir := createTestDir(t, map[string]string{
+		"file.txt":         "content",
+		"image.jpg":        "image",
+		"document.pdf":     "pdf",
+		"data.log":         "log",
+	})
+
+	cfg := ScanConfig{
+		Path:         dir,
+		Recursive:    true,
+		ExcludeRegex: []string{`\.log$`, `\.pdf$`},
+	}
+
+	files, err := Scan(cfg)
+	if err != nil {
+		t.Fatalf("Scan error: %v", err)
+	}
+
+	if len(files) != 2 {
+		t.Errorf("expected 2 files (.log and .pdf excluded), got %d", len(files))
+	}
+}
+
+func TestScan_SymlinkSkipped(t *testing.T) {
+	dir := t.TempDir()
+
+	realFile := filepath.Join(dir, "real.txt")
+	if err := os.WriteFile(realFile, []byte("real content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	symlinkFile := filepath.Join(dir, "link.txt")
+	if err := os.Symlink(realFile, symlinkFile); err != nil {
+		t.Skip("symlinks not supported on this platform")
+	}
+
+	cfg := ScanConfig{
+		Path:      dir,
+		Recursive: true,
+	}
+
+	files, err := Scan(cfg)
+	if err != nil {
+		t.Fatalf("Scan error: %v", err)
+	}
+
+	if len(files) != 1 {
+		t.Errorf("expected 1 file (symlink skipped), got %d", len(files))
+	}
+
+	if files[0].Path != realFile {
+		t.Errorf("expected real file, got %s", files[0].Path)
+	}
+}
+
+func TestScan_HardLinkDetection(t *testing.T) {
+	dir := t.TempDir()
+
+	file1 := filepath.Join(dir, "file1.txt")
+	if err := os.WriteFile(file1, []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	file2 := filepath.Join(dir, "file2.txt")
+	if err := os.Link(file1, file2); err != nil {
+		t.Skip("hard links not supported on this filesystem")
+	}
+
+	cfg := ScanConfig{
+		Path:      dir,
+		Recursive: true,
+	}
+
+	files, err := Scan(cfg)
+	if err != nil {
+		t.Fatalf("Scan error: %v", err)
+	}
+
+	if len(files) != 2 {
+		t.Errorf("expected 2 files, got %d", len(files))
+	}
+
+	hardLinkCount := CountHardLinks(files)
+	if hardLinkCount < 1 {
+		t.Errorf("expected at least 1 hard link detected, got %d", hardLinkCount)
+	}
+}
+
+func TestScan_OnProgressCallback(t *testing.T) {
+	dir := createTestDir(t, map[string]string{
+		"file1.txt": "content1",
+		"file2.txt": "content2",
+		"file3.txt": "content3",
+	})
+
+	callbackCalled := false
+	var maxFilesScanned int
+
+	cfg := ScanConfig{
+		Path:      dir,
+		Recursive: true,
+		OnProgress: func(stats models.ScanStats) {
+			callbackCalled = true
+			if stats.FilesScanned > maxFilesScanned {
+				maxFilesScanned = stats.FilesScanned
+			}
+		},
+	}
+
+	files, err := Scan(cfg)
+	if err != nil {
+		t.Fatalf("Scan error: %v", err)
+	}
+
+	if !callbackCalled {
+		t.Error("OnProgress callback should have been called")
+	}
+
+	if maxFilesScanned != len(files) {
+		t.Errorf("expected progress to report %d files, got %d", len(files), maxFilesScanned)
+	}
+}
+
+func TestScan_OnProgressNilSafety(t *testing.T) {
+	dir := createTestDir(t, map[string]string{
+		"file1.txt": "content1",
+	})
+
+	cfg := ScanConfig{
+		Path:       dir,
+		Recursive:  true,
+		OnProgress: nil,
+	}
+
+	_, err := Scan(cfg)
+	if err != nil {
+		t.Fatalf("Scan with nil OnProgress should not panic: %v", err)
 	}
 }

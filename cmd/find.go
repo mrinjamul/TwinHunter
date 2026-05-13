@@ -2,15 +2,16 @@ package cmd
 
 import (
 	"bufio"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/mrinjamul/twinhunter/core"
 	"github.com/mrinjamul/twinhunter/models"
-	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
 )
 
@@ -21,12 +22,14 @@ var (
 	findExclude    string
 	findExcludeRe  string
 	findExcludeDir string
+	findExcludeExt string
 	findWorkers    int
 	findOutput     string
 	findFormat     string
 	findKeep       string
 	findLink       string
 	findDelete     bool
+	findBackupDir  string
 	findDryRun     bool
 	findYes        bool
 	findVerbose    bool
@@ -51,6 +54,7 @@ func init() {
 	findCmd.Flags().StringVarP(&findExclude, "exclude", "x", "", "comma-separated glob patterns to exclude")
 	findCmd.Flags().StringVar(&findExcludeRe, "exclude-regex", "", "comma-separated regex patterns to exclude")
 	findCmd.Flags().StringVar(&findExcludeDir, "exclude-dir", "", "comma-separated directory names to skip (default: .git,node_modules,.svn,__pycache__)")
+	findCmd.Flags().StringVar(&findExcludeExt, "exclude-ext", "", "comma-separated file extensions to exclude (e.g. log,tmp)")
 	findCmd.Flags().IntVarP(&findWorkers, "workers", "w", 0, "number of parallel hashing workers (0 = auto)")
 	findCmd.Flags().StringVarP(&findOutput, "output", "o", "", "export report to file (format auto-detected from extension: .json, .csv, .html)")
 	findCmd.Flags().StringVarP(&findFormat, "format", "f", "pretty", "terminal output: pretty, json, csv, silent")
@@ -60,6 +64,7 @@ func init() {
 	findCmd.Flags().StringVarP(&findKeep, "keep", "k", "", "auto-keep strategy: oldest (default), newest, shortest")
 	findCmd.Flags().StringVarP(&findLink, "link", "l", "", "replace duplicates with links: hard, soft")
 	findCmd.Flags().BoolVarP(&findDelete, "delete", "d", false, "delete duplicate files")
+	findCmd.Flags().StringVar(&findBackupDir, "backup-dir", "", "move duplicates to backup directory")
 	findCmd.Flags().BoolVarP(&findDryRun, "dry-run", "n", false, "preview without making changes")
 }
 
@@ -82,11 +87,22 @@ func runFind(cmd *cobra.Command, args []string) error {
 }
 
 func runFindCLI(cmd *cobra.Command, path string) error {
-	minSize := parseSize(findMinSize)
-	maxSize := parseSize(findMaxSize)
+	var err error
+	minSize, err := parseSize(findMinSize)
+	if err != nil {
+		return fmt.Errorf("invalid min-size: %w", err)
+	}
+	maxSize, err := parseSize(findMaxSize)
+	if err != nil {
+		return fmt.Errorf("invalid max-size: %w", err)
+	}
 	exclude := splitCSV(findExclude)
 	excludeRe := splitCSV(findExcludeRe)
 	excludeDir := splitCSV(findExcludeDir)
+	// If --exclude-dir was not explicitly set, nil means "use defaults" in Scan.
+	if !cmd.Flags().Changed("exclude-dir") {
+		excludeDir = nil
+	}
 
 	if findKeep != "" {
 		switch findKeep {
@@ -94,6 +110,36 @@ func runFindCLI(cmd *cobra.Command, path string) error {
 		default:
 			return fmt.Errorf("invalid keep strategy: %q (valid: oldest, newest, shortest)", findKeep)
 		}
+	}
+
+	switch findFormat {
+	case "pretty", "json", "csv", "silent":
+	default:
+		return fmt.Errorf("invalid format: %q (valid: pretty, json, csv, silent)", findFormat)
+	}
+
+	flagsSet := 0
+	if findDelete {
+		flagsSet++
+	}
+	if findLink != "" {
+		flagsSet++
+	}
+	if findBackupDir != "" {
+		flagsSet++
+	}
+	if flagsSet > 1 {
+		return fmt.Errorf("--delete, --link, and --backup-dir are mutually exclusive")
+	}
+
+	if findWorkers < 0 {
+		return fmt.Errorf("invalid workers: %d (minimum 0 for auto)", findWorkers)
+	}
+
+	excludeExt := splitCSV(findExcludeExt)
+	for _, ext := range excludeExt {
+		ext = strings.TrimPrefix(ext, ".")
+		exclude = append(exclude, "*."+ext)
 	}
 
 	cfg := core.ScanConfig{
@@ -107,21 +153,13 @@ func runFindCLI(cmd *cobra.Command, path string) error {
 		Workers:      findWorkers,
 	}
 
-	var bar *progressbar.ProgressBar
 	if findFormat == "pretty" {
-		fmt.Printf("Scanning: %s\n", path)
+		fmt.Fprintf(os.Stderr, "Scanning: %s\n", path)
 		if findRecursive {
-			fmt.Println("Mode: recursive")
+			fmt.Fprintln(os.Stderr, "Mode: recursive")
 		}
-		fmt.Println("Discovering files...")
-		bar = progressbar.NewOptions(-1,
-			progressbar.OptionSetDescription("Scanning files..."),
-			progressbar.OptionSetWriter(os.Stderr),
-			progressbar.OptionShowCount(),
-			progressbar.OptionSetTheme(progressbar.Theme{Saucer: "█", SaucerPadding: " ", BarStart: "[", BarEnd: "]"}),
-		)
 		cfg.OnProgress = func(stats models.ScanStats) {
-			bar.Set(stats.FilesScanned)
+			writeProgress("Scanning files", stats.FilesScanned, 0)
 		}
 	}
 
@@ -130,18 +168,39 @@ func runFindCLI(cmd *cobra.Command, path string) error {
 		return fmt.Errorf("scan error: %w", err)
 	}
 
-	if findFormat == "pretty" {
-		bar.Finish()
-		fmt.Fprintln(os.Stderr)
-		hardLinks := core.CountHardLinks(allFiles)
-		fmt.Printf("Found %d files (%s)", len(allFiles), core.FormatSize(totalSize(allFiles)))
-		if hardLinks > 0 {
-			fmt.Printf(" (%d hard links)", hardLinks)
-		}
-		fmt.Println(". Finding duplicates...")
+	sizeGroups := core.GroupBySize(allFiles)
+	var candidatesCount int
+	for _, g := range sizeGroups {
+		candidatesCount += len(g)
 	}
 
-	groups := core.FindDuplicates(allFiles, findWorkers)
+	if findFormat == "pretty" {
+		done()
+		hardLinks := core.CountHardLinks(allFiles)
+		fmt.Fprintf(os.Stderr, "Found %d files (%s)", len(allFiles), core.FormatSize(totalSize(allFiles)))
+		if hardLinks > 0 {
+			fmt.Fprintf(os.Stderr, " (%d hard links)", hardLinks)
+		}
+
+		if candidatesCount > 0 {
+			fmt.Fprintln(os.Stderr, ". Checking for matches...")
+		}
+	}
+
+	groups := core.FindDuplicates(allFiles, findWorkers, func(p core.HashProgress) {
+		if findFormat == "pretty" && candidatesCount > 0 {
+			switch p.Phase {
+			case "blake3":
+				writeProgress("Hashing files", p.Current, p.Total)
+			case "sha256":
+				writeProgress("Verifying matches", p.Current, p.Total)
+			}
+		}
+	})
+
+	if findFormat == "pretty" && candidatesCount > 0 {
+		done()
+	}
 
 	if findSort == "count" {
 		core.SortGroupsByCount(groups)
@@ -151,30 +210,20 @@ func runFindCLI(cmd *cobra.Command, path string) error {
 		core.SortGroupsBySize(groups)
 	}
 
+	// Sort files within each group so the first file shown as [keep]
+	// is always a meaningful default (oldest, tiebreak: shortest path).
+	activeKeep := findKeep
+	if activeKeep == "" {
+		activeKeep = "oldest"
+	}
+	for i, g := range groups {
+		keep, toRemove := core.ApplyKeepStrategy(g, activeKeep)
+		groups[i].Files = append([]models.FileInfo{keep}, toRemove...)
+	}
+
 	report := core.BuildReport(allFiles, groups, path)
 
-	if findFormat == "json" {
-		data, _ := json.MarshalIndent(report, "", "  ")
-		fmt.Println(string(data))
-		return nil
-	}
-
-	if findFormat == "csv" {
-		printCSV(report)
-		return nil
-	}
-
-	if findFormat == "silent" {
-		return nil
-	}
-
-	printReport(report)
-
-	if len(groups) == 0 {
-		fmt.Println("\nNo duplicates found.")
-		return nil
-	}
-
+	// Export to file first (before display, so errors are surfaced).
 	if findOutput != "" {
 		ext := strings.ToLower(filepath.Ext(findOutput))
 		var exportErr error
@@ -187,26 +236,62 @@ func runFindCLI(cmd *cobra.Command, path string) error {
 			exportErr = core.ExportJSON(report, findOutput)
 		}
 		if exportErr != nil {
-			fmt.Fprintf(os.Stderr, "Error writing report: %v\n", exportErr)
-		} else {
+			return fmt.Errorf("failed to write report: %w", exportErr)
+		}
+	}
+
+	// Display to terminal. For JSON/CSV output, skip display when saving to file
+	// to avoid duplicate output.
+	displayJSON := findFormat == "json" && findOutput == ""
+	displayCSV := findFormat == "csv" && findOutput == ""
+	displayPretty := findFormat == "pretty"
+
+	if displayJSON {
+		data, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal report: %w", err)
+		}
+		fmt.Println(string(data))
+	}
+
+	if displayCSV {
+		printCSV(report)
+	}
+
+	if displayPretty {
+		printReport(report)
+		if findOutput != "" {
 			fmt.Printf("\nReport saved to: %s\n", findOutput)
 		}
 	}
 
-	if findDryRun {
-		fmt.Println("\n[DRY RUN] No changes made.")
+	if len(groups) == 0 {
+		if displayPretty {
+			fmt.Println("\nNo duplicates found.")
+		}
 		return nil
 	}
 
-	if findDelete || findLink != "" {
+	if findDelete || findLink != "" || findBackupDir != "" {
 		if findKeep == "" {
 			findKeep = "oldest"
 		}
 		return applyActionsCLI(groups)
 	}
 
+	if findDryRun {
+		if findFormat == "pretty" {
+			fmt.Println("\n[DRY RUN] No changes made.")
+		}
+		return nil
+	}
+
 	if findFormat == "pretty" && !findYes {
-		promptActionCLI(groups)
+		if !isTerminal() {
+			fmt.Fprintln(os.Stderr, "Warning: stdin is not a terminal, skipping interactive prompt. Use -y to auto-confirm actions.")
+			return nil
+		}
+		return promptActionCLI(groups)
 	}
 
 	return nil
@@ -225,6 +310,9 @@ func applyActionsCLI(groups []models.DuplicateGroup) error {
 	case findLink == "soft":
 		action = core.ActionSoftLink
 		actionName = "soft-link"
+	case findBackupDir != "":
+		action = core.ActionBackup
+		actionName = "backup"
 	default:
 		return nil
 	}
@@ -240,37 +328,55 @@ func applyActionsCLI(groups []models.DuplicateGroup) error {
 		fmt.Printf("Strategy: keep %s\n", findKeep)
 	}
 
-	if !findYes && !findDryRun {
-		var response string
+	if findFormat == "pretty" && !findYes && !findDryRun {
+		scanner := bufio.NewScanner(os.Stdin)
 		fmt.Print("\nProceed? (y/N): ")
-		fmt.Scanln(&response)
-		if strings.ToLower(response) != "y" && strings.ToLower(response) != "yes" {
+		if !scanner.Scan() {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+		response := strings.TrimSpace(strings.ToLower(scanner.Text()))
+		if response != "y" && response != "yes" {
 			fmt.Println("Cancelled.")
 			return nil
 		}
 	}
 
 	var successCount, errorCount int
+	var wastedSpace int64
+	processed := 0
 	for _, g := range groups {
 		keep, toRemove := core.ApplyKeepStrategy(g, findKeep)
+		wastedSpace += g.Size * int64(len(toRemove))
 		for _, dup := range toRemove {
-			if findDryRun {
-				if findFormat == "pretty" {
-					fmt.Printf("Would remove: %s\n", dup.Path)
+			processed++
+		if findDryRun {
+			if findFormat == "pretty" {
+				switch {
+				case findDelete:
+					fmt.Printf("[%d/%d] Would delete: %s\n", processed, totalActions, dup.Path)
+				case findBackupDir != "":
+					fmt.Printf("[%d/%d] Would backup: %s\n", processed, totalActions, dup.Path)
+				default:
+					fmt.Printf("[%d/%d] Would link: %s\n", processed, totalActions, dup.Path)
 				}
-				successCount++
-				continue
 			}
+			successCount++
+			continue
+		}
 
 			if findFormat == "pretty" || findVerbose {
-				if findDelete {
-					fmt.Printf("Deleting: %s\n", dup.Path)
-				} else {
-					fmt.Printf("Linking: %s -> %s\n", dup.Path, keep.Path)
+				switch {
+				case findDelete:
+					fmt.Printf("[%d/%d] Deleting: %s\n", processed, totalActions, dup.Path)
+				case findBackupDir != "":
+					fmt.Printf("[%d/%d] Backing up: %s\n", processed, totalActions, dup.Path)
+				default:
+					fmt.Printf("[%d/%d] Linking: %s -> %s\n", processed, totalActions, dup.Path, keep.Path)
 				}
 			}
 
-			if err := core.ApplyAction(action, keep, dup, ""); err != nil {
+			if err := core.ApplyAction(action, keep, dup, findBackupDir); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				errorCount++
 			} else {
@@ -281,8 +387,13 @@ func applyActionsCLI(groups []models.DuplicateGroup) error {
 
 	if findFormat == "pretty" && !findDryRun {
 		fmt.Printf("\nDone. %d succeeded, %d failed.\n", successCount, errorCount)
+		fmt.Printf("Targeted space recovered: %s\n", core.FormatSize(wastedSpace))
 	} else if findDryRun {
 		fmt.Printf("\n[DRY RUN] Would process %d files.\n", successCount)
+	}
+
+	if errorCount > 0 {
+		return fmt.Errorf("%d actions failed", errorCount)
 	}
 
 	return nil
@@ -293,12 +404,6 @@ func promptActionCLI(groups []models.DuplicateGroup) error {
 		return nil
 	}
 
-	var totalActions int
-	for _, g := range groups {
-		_, toRemove := core.ApplyKeepStrategy(g, "oldest")
-		totalActions += len(toRemove)
-	}
-
 	scanner := bufio.NewScanner(os.Stdin)
 
 	fmt.Println()
@@ -306,8 +411,9 @@ func promptActionCLI(groups []models.DuplicateGroup) error {
 	fmt.Println("  1) Delete duplicates")
 	fmt.Println("  2) Replace with hard links")
 	fmt.Println("  3) Replace with soft links")
-	fmt.Println("  4) Skip")
-	fmt.Print("\nChoice [1-4, Enter=4]: ")
+	fmt.Println("  4) Backup duplicates")
+	fmt.Println("  5) Skip")
+	fmt.Print("\nChoice [1-5, Enter=5]: ")
 
 	actionChosen := false
 	for {
@@ -316,7 +422,7 @@ func promptActionCLI(groups []models.DuplicateGroup) error {
 		}
 		input := strings.TrimSpace(scanner.Text())
 
-		if input == "" || input == "4" {
+		if input == "" || input == "5" {
 			return nil
 		}
 		if input == "1" {
@@ -334,7 +440,20 @@ func promptActionCLI(groups []models.DuplicateGroup) error {
 			actionChosen = true
 			break
 		}
-		fmt.Print("Invalid choice. Enter 1-4 [Enter=4]: ")
+		if input == "4" {
+			fmt.Print("\nBackup directory path: ")
+			if !scanner.Scan() {
+				return nil
+			}
+			findBackupDir = strings.TrimSpace(scanner.Text())
+			if findBackupDir == "" {
+				fmt.Println("Cancelled.")
+				return nil
+			}
+			actionChosen = true
+			break
+		}
+		fmt.Print("Invalid choice. Enter 1-5 [Enter=5]: ")
 	}
 
 	if !actionChosen {
@@ -370,6 +489,12 @@ func promptActionCLI(groups []models.DuplicateGroup) error {
 		}
 	}
 
+	var totalActions int
+	for _, g := range groups {
+		_, toRemove := core.ApplyKeepStrategy(g, findKeep)
+		totalActions += len(toRemove)
+	}
+
 	fmt.Println()
 	fmt.Printf("Will %s %d duplicate files (keep %s)\n", getActionLabel(), totalActions, findKeep)
 	fmt.Print("\nProceed? [y/N]: ")
@@ -388,13 +513,18 @@ func promptActionCLI(groups []models.DuplicateGroup) error {
 }
 
 func getActionLabel() string {
-	if findDelete {
+	switch {
+	case findDelete:
 		return "delete"
-	}
-	if findLink == "hard" {
+	case findLink == "hard":
 		return "hard-link"
+	case findLink == "soft":
+		return "soft-link"
+	case findBackupDir != "":
+		return "backup"
+	default:
+		return "soft-link"
 	}
-	return "soft-link"
 }
 
 func printReport(report models.Report) {
@@ -410,7 +540,11 @@ func printReport(report models.Report) {
 
 	if findVerbose {
 		for i, g := range report.DupGroups {
-			fmt.Printf("Group %d — %d copies, %s each (hash: %s)\n", i+1, len(g.Files), core.FormatSize(g.Size), g.Hash[:16]+"...")
+			hashDisplay := g.Hash
+			if len(hashDisplay) > 16 {
+				hashDisplay = hashDisplay[:16] + "..."
+			}
+			fmt.Printf("Group %d — %d copies, %s each (hash: %s)\n", i+1, len(g.Files), core.FormatSize(g.Size), hashDisplay)
 			for j, f := range g.Files {
 				prefix := "  dup"
 				if j == 0 {
@@ -439,42 +573,56 @@ func printReport(report models.Report) {
 			fmt.Println()
 		}
 		if len(report.DupGroups) > 20 {
-			fmt.Printf("... and %d more groups. Use -v for full output.\n", len(report.DupGroups)-20)
+			fmt.Printf("... and %d more groups. Use -v (verbose) to show all groups with full details.\n", len(report.DupGroups)-20)
 			fmt.Println()
 		}
 	}
 }
 
-func parseSize(s string) int64 {
+func parseSize(s string) (int64, error) {
 	if s == "" || s == "0" {
-		return 0
+		return 0, nil
 	}
 	s = strings.TrimSpace(s)
 	last := strings.ToLower(s[len(s)-1:])
 
 	switch last {
 	case "k":
-		var n int64
-		fmt.Sscanf(s[:len(s)-1], "%d", &n)
-		return n * 1024
+		n, err := strconv.ParseInt(s[:len(s)-1], 10, 64)
+		if err != nil || n < 0 {
+			return 0, fmt.Errorf("invalid size: %s", s)
+		}
+		return n * 1024, nil
 	case "m":
-		var n int64
-		fmt.Sscanf(s[:len(s)-1], "%d", &n)
-		return n * 1024 * 1024
+		n, err := strconv.ParseInt(s[:len(s)-1], 10, 64)
+		if err != nil || n < 0 {
+			return 0, fmt.Errorf("invalid size: %s", s)
+		}
+		return n * 1024 * 1024, nil
 	case "g":
-		var n int64
-		fmt.Sscanf(s[:len(s)-1], "%d", &n)
-		return n * 1024 * 1024 * 1024
+		n, err := strconv.ParseInt(s[:len(s)-1], 10, 64)
+		if err != nil || n < 0 {
+			return 0, fmt.Errorf("invalid size: %s", s)
+		}
+		return n * 1024 * 1024 * 1024, nil
+	case "t":
+		n, err := strconv.ParseInt(s[:len(s)-1], 10, 64)
+		if err != nil || n < 0 {
+			return 0, fmt.Errorf("invalid size: %s", s)
+		}
+		return n * 1024 * 1024 * 1024 * 1024, nil
 	default:
-		var n int64
-		fmt.Sscanf(s, "%d", &n)
-		return n
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil || n <= 0 {
+			return 0, fmt.Errorf("invalid size: %s (valid suffixes: K, M, G, T)", s)
+		}
+		return n, nil
 	}
 }
 
 func splitCSV(s string) []string {
 	if s == "" {
-		return nil
+		return []string{}
 	}
 	parts := strings.Split(s, ",")
 	result := make([]string, 0, len(parts))
@@ -495,11 +643,56 @@ func totalSize(files []models.FileInfo) int64 {
 	return total
 }
 
+const barWidth = 30
+
+func writeProgress(prefix string, current, total int) {
+	var line string
+	if total <= 0 {
+		line = fmt.Sprintf("%s... (%d)", prefix, current)
+	} else {
+		if current > total {
+			current = total
+		}
+		ratio := float64(current) / float64(total)
+		filled := int(ratio * float64(barWidth))
+		var bar string
+		if filled >= barWidth {
+			bar = "[" + strings.Repeat("=", barWidth) + "]"
+		} else {
+			bar = "[" + strings.Repeat("=", filled) + ">" + strings.Repeat("-", barWidth-filled-1) + "]"
+		}
+		line = fmt.Sprintf("%s %s %d/%d", prefix, bar, current, total)
+	}
+	fmt.Fprintf(os.Stderr, "\r%-80s", line)
+}
+
+func done() {
+	fmt.Fprintf(os.Stderr, "\r%s\r", strings.Repeat(" ", 80))
+}
+
+func isTerminal() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
 func printCSV(report models.Report) {
-	fmt.Printf("group,hash,size,path,is_duplicate,mod_time\n")
+	w := csv.NewWriter(os.Stdout)
+	defer w.Flush()
+
+	w.Write([]string{"group", "hash", "size", "path", "is_duplicate", "mod_time"})
 	for gi, g := range report.DupGroups {
 		for fi, f := range g.Files {
-			fmt.Printf("%d,%s,%d,%s,%t,%s\n", gi+1, g.Hash, f.Size, f.Path, fi > 0, f.ModTime.Format("2006-01-02 15:04:05"))
+			w.Write([]string{
+				fmt.Sprintf("%d", gi+1),
+				g.Hash,
+				fmt.Sprintf("%d", f.Size),
+				f.Path,
+				fmt.Sprintf("%t", fi > 0),
+				f.ModTime.Format("2006-01-02 15:04:05"),
+			})
 		}
 	}
 }

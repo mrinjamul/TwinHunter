@@ -273,3 +273,133 @@ func TestBuildReport(t *testing.T) {
 		t.Errorf("expected scan path '/test', got '%s'", report.ScanPath)
 	}
 }
+
+func TestMoveToBackup(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := filepath.Join(dir, "backup")
+
+	srcFile := filepath.Join(dir, "test.txt")
+	if err := os.WriteFile(srcFile, []byte("test content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MoveToBackup(srcFile, backupDir); err != nil {
+		t.Fatalf("MoveToBackup failed: %v", err)
+	}
+
+	if _, err := os.Stat(srcFile); !os.IsNotExist(err) {
+		t.Error("source file should not exist after backup")
+	}
+
+	relPathFromRoot, _ := filepath.Rel("/", srcFile)
+	expectedDest := filepath.Join(backupDir, relPathFromRoot)
+	
+	if _, err := os.Stat(expectedDest); err != nil {
+		t.Errorf("backup file should exist at %s: %v", expectedDest, err)
+	}
+
+	data, _ := os.ReadFile(expectedDest)
+	if string(data) != "test content" {
+		t.Errorf("backup content mismatch: got %q", string(data))
+	}
+}
+
+func TestApplyAction(t *testing.T) {
+	dir := t.TempDir()
+
+	keepFile := filepath.Join(dir, "keep.txt")
+	dupFile := filepath.Join(dir, "dup.txt")
+
+	if err := os.WriteFile(keepFile, []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dupFile, []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	keep := models.FileInfo{Path: keepFile}
+	dup := models.FileInfo{Path: dupFile}
+
+	if err := ApplyAction(ActionDelete, keep, dup, ""); err != nil {
+		t.Fatalf("ApplyAction delete failed: %v", err)
+	}
+
+	if _, err := os.Stat(dupFile); !os.IsNotExist(err) {
+		t.Error("dup file should be deleted")
+	}
+}
+
+func TestApplyAction_None(t *testing.T) {
+	keep := models.FileInfo{Path: "/keep"}
+	dup := models.FileInfo{Path: "/dup"}
+
+	err := ApplyAction(ActionNone, keep, dup, "")
+	if err != nil {
+		t.Errorf("ActionNone should return nil, got %v", err)
+	}
+}
+
+func TestCountHardLinks(t *testing.T) {
+	files := []models.FileInfo{
+		{Path: "/a", IsHardLink: false},
+		{Path: "/b", IsHardLink: true},
+		{Path: "/c", IsHardLink: true},
+		{Path: "/d", IsHardLink: false},
+	}
+
+	count := CountHardLinks(files)
+	if count != 2 {
+		t.Errorf("CountHardLinks = %d, want 2", count)
+	}
+
+	countEmpty := CountHardLinks([]models.FileInfo{})
+	if countEmpty != 0 {
+		t.Errorf("CountHardLinks(empty) = %d, want 0", countEmpty)
+	}
+}
+
+func TestPlatformName(t *testing.T) {
+	name := PlatformName()
+	if name == "" {
+		t.Error("PlatformName should not be empty")
+	}
+}
+
+func TestFormatSize_TB(t *testing.T) {
+	oneTB := int64(1024) * 1024 * 1024 * 1024
+	got := FormatSize(oneTB)
+	if got != "1.0 TB" {
+		t.Errorf("FormatSize(1TB) = %q, want \"1.0 TB\"", got)
+	}
+}
+
+func TestHashPipeline_WorkerEdgeCases(t *testing.T) {
+	dir := t.TempDir()
+	file1 := filepath.Join(dir, "test1.txt")
+	file2 := filepath.Join(dir, "test2.txt")
+
+	os.WriteFile(file1, []byte("content1"), 0644)
+	os.WriteFile(file2, []byte("content2"), 0644)
+
+	results := HashPipeline([]string{file1, file2}, "blake3", 0, nil)
+	if len(results) != 2 {
+		t.Errorf("expected 2 results, got %d", len(results))
+	}
+
+	results2 := HashPipeline([]string{file1, file2}, "blake3", 10, nil)
+	if len(results2) != 2 {
+		t.Errorf("expected 2 results with workers=10, got %d", len(results2))
+	}
+
+	results3 := HashPipeline([]string{file1, file2}, "blake3", -1, nil)
+	if len(results3) != 2 {
+		t.Errorf("expected 2 results with workers=-1, got %d", len(results3))
+	}
+}
+
+func TestHashSHA256_NonExistent(t *testing.T) {
+	_, err := HashSHA256("/nonexistent/path/file.txt")
+	if err == nil {
+		t.Error("expected error for nonexistent file")
+	}
+}

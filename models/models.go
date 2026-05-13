@@ -8,8 +8,6 @@ type FileInfo struct {
 	Name       string
 	Size       int64
 	ModTime    time.Time
-	Blake3     string
-	SHA256     string
 	IsHardLink bool
 }
 

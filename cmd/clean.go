@@ -3,8 +3,11 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/mrinjamul/twinhunter/core"
+	"github.com/mrinjamul/twinhunter/models"
 	"github.com/spf13/cobra"
 )
 
@@ -17,9 +20,9 @@ var (
 )
 
 var cleanCmd = &cobra.Command{
-	Use:   "clean [report.json]",
+	Use:   "clean [report]",
 	Short: "Clean duplicates from a saved report",
-	Long:  `Apply delete/link/backup actions to duplicates listed in a previously exported JSON report.`,
+	Long:  `Apply delete/link/backup actions to duplicates listed in a previously exported report (JSON, CSV, or HTML).`,
 	Args:  cobra.ExactArgs(1),
 	RunE:  runClean,
 }
@@ -35,14 +38,46 @@ func init() {
 }
 
 func runClean(cmd *cobra.Command, args []string) error {
-	report, err := core.ImportJSON(args[0])
+	ext := strings.ToLower(filepath.Ext(args[0]))
+	var report models.Report
+	var err error
+	switch ext {
+	case ".json":
+		report, err = core.ImportJSON(args[0])
+	case ".csv":
+		report, err = core.ImportCSV(args[0])
+	case ".html", ".htm":
+		report, err = core.ImportHTML(args[0])
+	default:
+		return fmt.Errorf("unsupported report format: %q (supported: .json, .csv, .html)", ext)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to read report: %w", err)
 	}
 
 	if len(report.DupGroups) == 0 {
-		fmt.Println("No duplicates found in report.")
+		fmt.Fprintln(os.Stderr, "No duplicates found in report.")
 		return nil
+	}
+
+	switch cleanKeep {
+	case "oldest", "newest", "shortest":
+	default:
+		return fmt.Errorf("invalid keep strategy: %q (valid: oldest, newest, shortest)", cleanKeep)
+	}
+
+	flagsSet := 0
+	if cleanDelete {
+		flagsSet++
+	}
+	if cleanLink != "" {
+		flagsSet++
+	}
+	if cleanBackupDir != "" {
+		flagsSet++
+	}
+	if flagsSet > 1 {
+		return fmt.Errorf("--delete, --link, and --backup-dir are mutually exclusive")
 	}
 
 	var action core.Action
@@ -59,24 +94,33 @@ func runClean(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no action specified. Use --delete, --link, or --backup-dir")
 	}
 
+	var errorCount int
+	processed := 0
+	totalActions := report.DupFiles
 	for _, g := range report.DupGroups {
 		keep, toRemove := core.ApplyKeepStrategy(g, cleanKeep)
 		for _, dup := range toRemove {
+			processed++
 			if cleanDryRun {
-				fmt.Printf("[DRY RUN] Would remove: %s\n", dup.Path)
+				fmt.Fprintf(os.Stderr, "[%d/%d] [DRY RUN] Would remove: %s\n", processed, totalActions, dup.Path)
 				continue
 			}
-			fmt.Printf("Processing: %s\n", dup.Path)
+			fmt.Fprintf(os.Stderr, "[%d/%d] Processing: %s\n", processed, totalActions, dup.Path)
 			if err := core.ApplyAction(action, keep, dup, cleanBackupDir); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				errorCount++
 			}
 		}
 	}
 
 	if !cleanDryRun {
-		fmt.Printf("Done. Cleaned %d duplicate files.\n", report.DupFiles)
+		fmt.Fprintf(os.Stderr, "Done. Cleaned %d duplicate files. %d errors.\n", report.DupFiles, errorCount)
 	} else {
-		fmt.Printf("[DRY RUN] Would clean %d duplicate files.\n", report.DupFiles)
+		fmt.Fprintf(os.Stderr, "[DRY RUN] Would clean %d duplicate files.\n", report.DupFiles)
+	}
+
+	if errorCount > 0 {
+		return fmt.Errorf("%d actions failed", errorCount)
 	}
 
 	return nil

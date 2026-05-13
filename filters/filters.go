@@ -1,6 +1,8 @@
 package filters
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -11,33 +13,31 @@ var defaultExcludes = []string{
 	"node_modules",
 	".svn",
 	"__pycache__",
-	".DS_Store",
-	"Thumbs.db",
 }
 
-// DefaultExcludes returns the built-in exclusion patterns.
+// DefaultExcludes returns a copy of the built-in directory exclusion patterns.
 func DefaultExcludes() []string {
-	return defaultExcludes
+	cp := make([]string, len(defaultExcludes))
+	copy(cp, defaultExcludes)
+	return cp
 }
 
 // MatchExclude checks if a path matches any of the given glob patterns.
 func MatchExclude(path string, patterns []string) bool {
-	base := filepath.Base(path)
 	for _, p := range patterns {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
 		}
-		matched, _ := filepath.Match(p, base)
+		matched, _ := filepath.Match(p, path)
 		if matched {
 			return true
 		}
-		matched, _ = filepath.Match(p, path)
-		if matched {
-			return true
-		}
-		if strings.Contains(path, p) {
-			return true
+		for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+			matched, _ = filepath.Match(p, part)
+			if matched {
+				return true
+			}
 		}
 	}
 	return false
@@ -52,6 +52,7 @@ func MatchExcludeRegex(path string, patterns []string) bool {
 		}
 		re, err := regexp.Compile(p)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: invalid exclude regex %q: %v\n", p, err)
 			continue
 		}
 		if re.MatchString(path) {
