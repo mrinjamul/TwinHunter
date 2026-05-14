@@ -1,4 +1,4 @@
-# twinhunter : A duplicate file finder command-line application
+# *TwinHunter* (formerly known as `go-dupfinder`)
 
 [![build status](https://github.com/mrinjamul/twinhunter/workflows/test/badge.svg)]()
 [![build status](https://github.com/mrinjamul/twinhunter/workflows/release/badge.svg)]()
@@ -8,5 +8,4 @@
 [![License: Apache 2](https://img.shields.io/badge/License-MIT%20-blue.svg)](https://github.com/mrinjamul/twinhunter/blob/master/LICENSE)
 [![Github all releases](https://img.shields.io/github/downloads/mrinjamul/twinhunter/total.svg)](https://GitHub.com/mrinjamul/twinhunter/releases/)
 
-_twinhunter_: a duplicate file finder that will help you
-clean up files effectively and easily.
+Find and clean up duplicate files right from your terminal.

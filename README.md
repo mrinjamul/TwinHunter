@@ -8,96 +8,104 @@
 [![License: Apache 2](https://img.shields.io/badge/License-MIT%20-blue.svg)](https://github.com/mrinjamul/twinhunter/blob/master/LICENSE)
 [![Github all releases](https://img.shields.io/github/downloads/mrinjamul/twinhunter/total.svg)](https://GitHub.com/mrinjamul/twinhunter/releases/)
 
-CLI tool to find and clean duplicate files. Written in Go.
+Find and clean up duplicate files right from your terminal.
 
 ## Features
 
-- **Fast scanning** — optimized `WalkDir` with parallel hashing workers
-- **Two-stage hashing** — Blake3 for initial grouping, SHA256 for verification
-- **Flexible filtering** — min/max size, glob/regex exclusions, directory exclusions
-- **Smart cleanup** — delete, replace with hard/soft links, or backup
-- **Multiple outputs** — pretty terminal, JSON, CSV, HTML reports
-- **Sortable results** — sort duplicate groups by size, count, or path
-- **Keep strategies** — auto-select which copy to keep (oldest, newest, shortest path)
-- **Dry run** — preview changes before committing to destructive actions
-- **Progress indicator** — live file count during scanning
-- **Hard link detection** — identifies files that are already hard-linked
-- **Shell completion** — bash, zsh, fish, powershell support
+- **Fast scanning.** Parallel hashing workers powered by WalkDir.
+- **Two-stage hashing.** Blake3 for speed, SHA256 to be sure.
+- **Flexible filtering.** Min/max size, glob and regex patterns, directory excludes.
+- **Smart cleanup.** Delete, hard link, soft link, or move to a backup folder.
+- **Multiple outputs.** Pretty terminal, JSON, CSV, or HTML reports.
+- **Sortable results.** By size, number of copies, or file path.
+- **Keep strategies.** Automatically decide which copy to keep (oldest, newest, shortest path).
+- **Dry run.** See what would happen before making any changes.
+- **Progress indicator.** Live file count while scanning.
+- **Hard link detection.** Know which files already share disk space.
+- **Shell completion.** Bash, Zsh, Fish, and PowerShell.
 
 ## Quick Start
 
 ```sh
-# Scan current directory
+# Scan wherever you are right now
 twinhunter
 
-# Scan a specific path (non-recursive)
+# Point at a specific folder
 twinhunter /path/to/dir
 
-# Recursive scan with verbose output
+# Dive into subfolders and see details
 twinhunter find /path/to/dir -r -v
 
-# Export report to JSON
+# Save results to a JSON file
 twinhunter find /path/to/dir -r -o report.json
 
-# Delete duplicates (with confirmation prompt)
+# Find duplicates and delete them (it will ask first)
 twinhunter find /path/to/dir -r -d
 
-# Replace with hard links
+# Replace duplicates with hard links to save space
 twinhunter find /path/to/dir -r -l hard
 
-# Dry run preview
+# Preview what would happen without touching anything
 twinhunter find /path/to/dir -r -d -n
 
-# Skip confirmation
+# Skip the "are you sure?" prompts
 twinhunter find /path/to/dir -r -d -y
+
+# Skip certain file types like logs and temp files
+twinhunter find /path/to/dir -r --exclude-ext "log,tmp"
+
+# Move duplicates to a backup folder instead of deleting
+twinhunter find /path/to/dir -r --backup-dir ./dupe_backup
 ```
 
 ## Commands
 
 ### `twinhunter [path]`
 
-Shorthand for `twinhunter find [path]`. Scans for duplicate files non-recursively; see `find` below for all options.
+A quick way to scan the current folder without subdirectories. Just give it an optional path. For all the flags and options, see the `find` command below.
 
 ### `twinhunter find [path] [flags]`
 
-Full-featured duplicate scan with all options.
+All the power, all the flags. Scan any directory with fine-grained control.
 
 | Flag | Short | Description |
 |---|---|---|
-| `--recursive` | `-r` | Scan subdirectories recursively |
-| `--verbose` | `-v` | Show detailed per-group output (hash, size, date) |
-| `--min-size` | `-m` | Minimum file size (e.g. `1M`, `100K`, `1G`) |
-| `--max-size` | `-M` | Maximum file size (e.g. `10M`) |
-| `--exclude` | `-x` | Comma-separated glob patterns to exclude files |
-| `--exclude-regex` | | Comma-separated regex patterns to exclude |
-| `--exclude-dir` | | Directory names to skip (built-in defaults: `.git,node_modules,.svn,__pycache__,.DS_Store,Thumbs.db`; overrides defaults if set) |
-| `--workers` | `-w` | Parallel hashing workers (0 = auto-detect CPU cores) |
-| `--output` | `-o` | Export report to file (format auto-detected from extension) |
-| `--format` | `-f` | Terminal output: `pretty`, `json`, `csv`, `silent` (default: `pretty`) |
-| `--sort` | | Sort groups by: `size`, `count`, `path` (default: `size`) |
-| `--keep` | `-k` | Auto-keep strategy: `oldest` (default), `newest`, `shortest` |
-| `--link` | `-l` | Replace duplicates with links: `hard`, `soft` |
-| `--delete` | `-d` | Delete duplicate files |
-| `--yes` | `-y` | Skip confirmation prompts |
-| `--dry-run` | `-n` | Preview without making changes |
+| `--recursive` | `-r` | Look inside subfolders too |
+| `--verbose` | `-v` | Show hashes, sizes, and timestamps for every file in a group |
+| `--min-size` | `-m` | Ignore files smaller than this (e.g. `1M`, `100K`, `1G`) |
+| `--max-size` | `-M` | Ignore files larger than this (e.g. `10M`) |
+| `--exclude` | `-x` | Skip files matching these glob patterns (separate with commas) |
+| `--exclude-regex` | | Skip files matching these regex patterns (separate with commas) |
+| `--exclude-dir` | | Directory names to skip entirely (defaults: `.git,node_modules,.svn,__pycache__`; overrides defaults if set) |
+| `--exclude-ext` | | File extensions to skip (e.g. `log,tmp`) |
+| `--workers` | `-w` | How many parallel hashing workers to use (0 = use all CPU cores) |
+| `--output` | `-o` | Save a report to file (format is detected from the filename) |
+| `--format` | `-f` | How to display results: `pretty`, `json`, `csv`, or `silent` (default: `pretty`) |
+| `--sort` | | Order groups by: `size`, `count`, or `path` (default: `size`) |
+| `--keep` | `-k` | Which copy to keep: `oldest` (default), `newest`, `shortest` |
+| `--link` | `-l` | Replace duplicates with links: `hard` or `soft` |
+| `--delete` | `-d` | Delete the duplicate files |
+| `--backup-dir` | | Move duplicates to a backup folder instead |
+| `--yes` | `-y` | Skip all confirmation prompts |
+| `--dry-run` | `-n` | Preview what will happen without changing anything |
 
 ### `twinhunter clean report.json`
 
-Apply delete/link/backup actions to duplicates listed in a previously exported JSON report.
+Run cleanup on a report you saved earlier. Works with JSON, CSV, or HTML exports.
 
 One action flag is **required** (`--delete`, `--link`, or `--backup-dir`).
 
 | Flag | Short | Description |
 |---|---|---|
-| `--delete` | `-d` | Delete duplicate files |
-| `--link` | `-l` | Replace with links: `hard`, `soft` |
-| `--backup-dir` | | Move duplicates to backup directory |
-| `--keep` | `-k` | Keep strategy: `oldest` (default), `newest`, `shortest` |
-| `--dry-run` | `-n` | Preview without making changes |
+| `--delete` | `-d` | Delete the duplicate files |
+| `--link` | `-l` | Replace with links: `hard` or `soft` |
+| `--backup-dir` | | Move duplicates to a backup directory |
+| `--keep` | `-k` | Which copy to keep: `oldest` (default), `newest`, `shortest` |
+| `--dry-run` | `-n` | Preview what will happen without changing anything |
 
 ### `twinhunter completion [bash|zsh|fish|powershell]`
 
-Generate shell completion script.
+Get tab-completion for your favorite shell.
 
 ```sh
 # Bash (current session)
@@ -125,6 +133,8 @@ Show version and build information.
 
 ## Output Formats
 
+TwinHunter can show results in several ways. Pick the one that fits your workflow.
+
 ### Pretty (terminal)
 
 ```
@@ -133,7 +143,7 @@ Duplicate Files:  2
 Wasted Space:     190 B
 Recoverable:      42.2%
 
-Group 1 — 3 copies, 95 B each
+Group 1 - 3 copies, 95 B each
   [  keep] /path/to/original.jpg
   [  dup] /path/to/copy1.jpg
   [  dup] /path/to/copy2.jpg
@@ -155,7 +165,7 @@ Machine-readable output, suitable for piping to `jq` or other tools.
 twinhunter find /path -r -f csv
 ```
 
-Tabular output: `group, hash, size, path, is_duplicate, mod_time`
+Each row is one file with its group, hash, size, path, duplicate status, and modification time.
 
 ### Export to File
 
@@ -170,7 +180,7 @@ The `-o` flag exports to file independently of `-f`. Use both to display CSV/JSO
 
 ## Keep Strategies
 
-When deleting or linking duplicates, TwinHunter needs to know which file to preserve:
+Not sure which copy to keep? TwinHunter can decide for you using one of these rules:
 
 | Strategy | Keeps |
 |---|---|
@@ -180,20 +190,21 @@ When deleting or linking duplicates, TwinHunter needs to know which file to pres
 
 ## Interactive Action Prompt
 
-After showing results, TwinHunter presents a numbered menu:
+Once the scan finishes, you will see a menu like this:
 
 ```
 Select action:
   1) Delete duplicates
   2) Replace with hard links
   3) Replace with soft links
-  4) Skip
+  4) Backup duplicates
+  5) Skip
 
-Choice [1-4, Enter=4]:
+Choice [1-5, Enter=5]:
 ```
 
-- **Enter (no input)** at action prompt = **Skip** (exit cleanly)
-- After selecting an action, choose a keep strategy:
+Pressing Enter without typing anything skips the action and exits cleanly.
+After selecting an action, choose which copy to keep:
 
 ```
 Keep strategy:
@@ -204,7 +215,7 @@ Keep strategy:
 Choice [1-3, Enter=1]:
 ```
 
-- **Enter** at strategy prompt = **Oldest** (default)
+Pressing Enter here picks **Oldest** (the default).
 
 Finally, confirm:
 
@@ -212,28 +223,33 @@ Finally, confirm:
 Proceed? [y/N]:
 ```
 
-- **Enter** = No (exit cleanly)
-- Type `y` or `yes` to proceed
+Pressing Enter says no and exits cleanly. Type `y` or `yes` to go ahead.
 
-Use `-y` to skip all prompts when using `--delete` or `--link` flags directly.
+Use `-y` to skip all prompts when using `--delete`, `--link`, or `--backup-dir` flags directly.
 
-Interactive menus only appear in `pretty` terminal output. Formats like `json`, `csv`, and `silent` skip all prompts and exit immediately after reporting results.
+Interactive menus only show up in `pretty` terminal output. Formats like `json`, `csv`, and `silent` skip all prompts and exit right after reporting results.
 
 ## Examples
 
 ### Find large duplicates
 
+Only care about big files wasting space?
+
 ```sh
 twinhunter find /photos -r -m 1M -v
 ```
 
-### Find and delete, keeping oldest copy
+### Find and delete, keeping the oldest copy
+
+Clean up old duplicates and keep the earliest version.
 
 ```sh
 twinhunter find /documents -r -d -k oldest
 ```
 
-### Find and keep newest, using shorthand
+### Find and keep newest, using hard links
+
+Replace copies with hard links and keep the most recent file.
 
 ```sh
 twinhunter find /downloads -r -l hard -k newest
@@ -246,7 +262,9 @@ twinhunter find /media -r --sort count
 twinhunter find /media -r --sort path
 ```
 
-### Scriptable: silent scan, export to JSON
+### Silent scan, export to JSON
+
+Great for scripts and automation.
 
 ```sh
 twinhunter find /data -r -f silent -o dupes.json
@@ -254,7 +272,7 @@ twinhunter find /data -r -f silent -o dupes.json
 
 ### Validate keep strategy
 
-Invalid values are rejected immediately:
+Typing an invalid strategy will tell you what is allowed:
 
 ```
 $ twinhunter find /tmp -k invalid
@@ -263,17 +281,23 @@ Error: invalid keep strategy: "invalid" (valid: oldest, newest, shortest)
 
 ### Dry run before deleting
 
+Preview everything before committing.
+
 ```sh
 twinhunter find /backup -r -d -n
 ```
 
 ### Exclude build artifacts and node_modules
 
+Skip build artifacts and temp files during the scan.
+
 ```sh
 twinhunter find /project -r -x "*.log,*.tmp" --exclude-dir "dist,build"
 ```
 
 ### Export and clean later
+
+Save a report, review it, then clean up when you are ready.
 
 ```sh
 # Step 1: Find and export
@@ -288,68 +312,76 @@ twinhunter clean dupes.json -d
 
 ### Replace with hard links (saves disk space)
 
+No more wasted space from identical files sitting in different folders.
+
 ```sh
 twinhunter find /archive -r -l hard -k newest
 ```
 
 ### Interactive: scan, then choose action
 
+Scan first, decide later. The menu lets you pick delete, link, backup, or skip.
+
 ```sh
 twinhunter find /photos -r
-# After scan, a numbered menu lets you pick delete/link/skip
+```
+
+### Backup duplicates to a folder
+
+Move duplicates somewhere safe instead of deleting them outright.
+
+```sh
+twinhunter find /docs -r --backup-dir ./dupe_backup -k oldest
 ```
 
 ## Building
 
 ```sh
-# Quick build
+# Compile from source
 go build
 
-# Production build with version info
-go build -ldflags="-X 'github.com/mrinjamul/twinhunter/cmd.Version=$(git describe --tags $(git rev-list --tags --max-count=1) || echo "dev")' -X 'github.com/mrinjamul/twinhunter/cmd.GitCommit=$(git rev-parse HEAD)'"
-
-# Run locally
+# Run directly without building first
 go run . find /path/to/dir -r
 ```
 
 ## Testing
 
+TwinHunter comes with a full test suite. Run it to make sure everything works:
+
 ```sh
 # All tests
 go test ./...
 
-# Verbose
+# See what each test is doing
 go test ./... -v
 
-# Single package
+# Run tests for just one package
 go test ./core -run TestScanDuplicates -v
 ```
-
-Tests use the `test_data/` directory for fixtures.
 
 ## Project Structure
 
 ```
-main.go              → entry point
+main.go              → app starts here
 cmd/
-  root.go            → root command, dispatches to find
-  find.go            → find command with all flags
-  clean.go           → clean duplicates from saved report
-  completion.go      → shell completion generator
-  version.go         → version info
+  root.go            → the main `twinhunter` command, sends you to `find`
+  find.go            → the `find` command with all its flags
+  clean.go           → the `clean` command for acting on saved reports
+  completion.go      → generates shell completion scripts
+  version.go         → prints version info
 core/
-  scanner.go         → file discovery with WalkDir
-  hasher.go          → Blake3 + SHA256 hashing pipeline
-  dedup.go           → duplicate detection and grouping
-  actions.go         → delete, link, backup operations
-  report.go          → JSON/CSV/HTML export
+  scanner.go         → walks directories and discovers files
+  hasher.go          → hashing pipeline (Blake3 + SHA256)
+  dedup.go           → finds and groups duplicates
+  actions.go         → delete, link, and backup operations
+  report.go          → exports reports as JSON, CSV, or HTML
 filters/
-  filters.go         → exclude patterns, size filters
+  filters.go         → file filtering (exclude patterns, size ranges)
 models/
-  models.go          → FileInfo, DuplicateGroup, Report structs
-test_data/           → test fixtures
+  models.go          → data types (FileInfo, DuplicateGroup, Report)
+test_data/           → files used by automated tests
 ```
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+MIT License. See [LICENSE](LICENSE) for details.

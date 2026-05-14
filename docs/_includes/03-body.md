@@ -1,19 +1,30 @@
-## INSTALLING
+You can install TwinHunter from source or grab a pre-built binary.
 
-#### Installing from go
+## Installing
 
-First, use go get to install the latest version. This command will install the `twinhunter` and its dependencies:
+#### From source
 
-`go get -u github.com/mrinjamul/twinhunter`
+```sh
+go install github.com/mrinjamul/twinhunter@latest
+```
 
-#### Installing from Binaries
+#### Pre-built binaries
 
-Download for your platform
+Download the latest release for your platform:
 
 [Download](https://github.com/mrinjamul/twinhunter/releases)
 
 ## Usage
 
-```
-twinhunter find .
+Here are a few common ways to use TwinHunter:
+
+```sh
+# Scan the current directory
+twinhunter
+
+# Scan a folder recursively
+twinhunter find /path/to/files -r
+
+# Find and delete duplicates, keeping the oldest copy
+twinhunter find /path/to/files -r -d -k oldest -y
 ```

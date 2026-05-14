@@ -1,6 +1,6 @@
 name: twinhunter
 base: core24
-version: "1.0.0"
+version: "1.1.0"
 summary: A Simple duplicate file finder
 description: |
   A CLI tool to find and clean duplicate files.
